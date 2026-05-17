@@ -1,5 +1,11 @@
 # WebGL Image Decode Demo
 
+A WebGL image decoding demo that renders a textured rotating cube and
+experiments with custom JPEG/WebP decoding paths. It includes GPU-assisted JPEG
+decoding, WASM JPEG/WebP decoders, visual comparison against the browser
+decoder, upload support, diff contrast controls, and benchmark pages with
+readable timing tables.
+
 This project renders a textured rotating cube and includes a small standalone
 GPU-assisted JPEG decoder in `gpu-jpeg.js` plus a WASM/libwebp WebP decoder
 wrapper in `webp-decoder.js`.
