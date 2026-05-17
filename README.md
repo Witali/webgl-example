@@ -149,6 +149,11 @@ Build the WASM IDCT module from WAT:
 npm run build:wasm
 ```
 
+The JPEG manifest also includes five public-domain clipart JPEG fixtures and
+five public-domain landscape JPEG fixtures. Their source pages are listed in
+`assets/benchmark-jpegs/clipart-sources.json` and
+`assets/benchmark-jpegs/landscape-sources.json`.
+
 Run the native-browser-vs-WASM-vs-WASM+GPU-vs-GPU JPEG benchmark:
 
 ```powershell
@@ -156,7 +161,7 @@ $env:BROWSER='edge'
 $env:EDGE_HEADLESS='0'
 $env:EDGE_SWIFTSHADER='0'
 $env:BROWSER_TIMEOUT_MS='600000'
-node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 100 3 /wasm/jpeg-idct.wasm
+node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 110 3 /wasm/jpeg-idct.wasm
 ```
 
 The browser runner does not pass `--disable-gpu-sandbox` by default. If a

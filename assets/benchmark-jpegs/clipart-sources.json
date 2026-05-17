@@ -1,0 +1,27 @@
+[
+  {
+    "file": "/assets/benchmark-jpegs/clipart-apple.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Apple_Clip_Art.jpg",
+    "license": "Public domain according to Wikimedia Commons"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/clipart-bed.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Bed_Clip_Art.jpg",
+    "license": "Public domain according to Wikimedia Commons"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/clipart-spoon.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Spoon_Clip_Art.jpg",
+    "license": "Public domain according to Wikimedia Commons"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/clipart-table.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Table_Clip_Art.jpg",
+    "license": "Public domain according to Wikimedia Commons"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/clipart-rc135.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:RC-135_clip_art.jpg",
+    "license": "Public domain according to Wikimedia Commons"
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "file": "/assets/benchmark-jpegs/landscape-alaska.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Alaska_Landscape.jpg",
+    "license": "Public domain, USGS work according to Wikimedia Commons",
+    "download": "Wikimedia thumbnail generated from the source JPEG"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/landscape-cleveland-volcano.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Cleveland_Landscape_(20859826112).jpg",
+    "license": "Public domain, USGS work according to Wikimedia Commons",
+    "download": "Wikimedia thumbnail generated from the source JPEG"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/landscape-horizon.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Gfp-landscape-to-the-horizon.jpg",
+    "license": "Creative Commons Public Domain Dedication according to Wikimedia Commons",
+    "download": "Wikimedia thumbnail generated from the source JPEG"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/landscape-pennsylvania-pond.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Gfp-pennsylvania-landscape-of-pond-and-hills.jpg",
+    "license": "Creative Commons Public Domain Dedication according to Wikimedia Commons",
+    "download": "Wikimedia thumbnail generated from the source JPEG"
+  },
+  {
+    "file": "/assets/benchmark-jpegs/landscape-madison-golf-course.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Gfp-madison-wisconsin-golf-course-landscape.jpg",
+    "license": "Creative Commons Public Domain Dedication according to Wikimedia Commons",
+    "download": "Wikimedia thumbnail generated from the source JPEG"
+  }
+]
