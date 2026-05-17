@@ -10,11 +10,13 @@ const warmup = process.argv[4] || "3";
 const wasm = process.argv[5] || "/wasm/jpeg-idct.wasm";
 const readback = process.env.GPU_READBACK === "1" ? "1" : "0";
 const webgpu = process.env.WEBGPU_JPEG === "1" ? "1" : "0";
+const format = process.env.BENCHMARK_FORMAT || "";
 
 runBrowserPage({
   projectRoot,
   pagePath: "/tests/benchmark-jpeg-decode.html",
   query: {
+    format,
     manifest,
     limit,
     warmup,

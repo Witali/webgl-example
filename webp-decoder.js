@@ -22,12 +22,21 @@
 
     async decode(arrayBuffer) {
       const decode = await loadWebpDecode();
+      const started = performance.now();
       const imageData = await decode(arrayBuffer);
+      const decodeMs = performance.now() - started;
 
       return {
         width: imageData.width,
         height: imageData.height,
         pixels: imageData.data,
+        timings: {
+          decodeMs,
+          workMs: decodeMs,
+          readbackMs: 0,
+          measuresCleanWork: true,
+          timedPhase: "WASM WebP decode API",
+        },
       };
     }
   }

@@ -149,7 +149,9 @@ http://127.0.0.1:8000/tests/visual-jpeg-compare.html
 The page shows the browser-decoded image, the library-decoded image, and an
 amplified diff map. Use the decoder selector to switch between `GPU`, `WebGPU
 resident`, `WASM`, `WASM+GPU`, and `WASM WebP`. The upload input accepts JPEG
-and WebP files.
+and WebP files. The built-in image list includes a WebP copy of the first stone
+texture plus WebP copies of the public-domain landscape fixtures; choosing a
+WebP asset automatically switches the decoder to `WASM WebP`.
 
 Latest visual comparison results:
 
@@ -176,6 +178,12 @@ Build the WASM IDCT module from WAT:
 
 ```powershell
 npm run build:wasm
+```
+
+Regenerate the checked-in WebP texture and landscape assets:
+
+```powershell
+npm run encode:webp-assets
 ```
 
 The JPEG manifest also includes five public-domain clipart JPEG fixtures and
@@ -213,13 +221,16 @@ default browser resolves to Edge, but that launch mode is blocked by policy with
 `DevTools remote debugging is disallowed by the system admin`; explicit
 `BROWSER='edge'` still works.
 
-The benchmark fetches all JPEG files before timing. The native path measures
-`createImageBitmap()` decode time. The WASM path measures
-`WasmJpegDecoder.decode()`, which includes shared JS JPEG parsing/Huffman decode
-plus WASM IDCT and YCbCr to RGBA. The WASM+GPU and GPU paths measure their
-decode calls plus `gl.finish()`, and optionally include texture readback when
-`GPU_READBACK=1`. The result page uses both native browser decode and WASM JPEG
-decode as reference columns in the speedup table.
+The benchmark fetches all image files before timing and reports clean work time
+as the main `Work total` metric. Setup/upload and readback are shown separately
+and are not included in the reference speedups. The native path measures only the
+`createImageBitmap()` decode API around a prebuilt `Blob`. The WASM JPEG path
+uses JPEG entropy parse plus WASM IDCT/color conversion as clean work and reports
+copying coefficient blocks into WASM memory as setup. The WASM+GPU and GPU paths
+use JPEG entropy parse plus the GPU shader draw as clean work; texture creation,
+coefficient atlas packing, texture upload, and optional `GPU_READBACK=1` output
+readback stay in separate columns. The result page uses both native browser
+decode and WASM decode as reference columns in the speedup table.
 
 To include the experimental WebGPU-resident decoder, enable the WebGPU browser
 flag and keep the dataset to known SOF0 fixtures while the subset is still being
@@ -232,7 +243,8 @@ node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm
 ```
 
 For this decoder, benchmark timings use `gpuDecodeMs`, so upload/setup and
-`readPixels()` readback are reported separately and do not count as decode time.
+`readPixels()` readback are reported separately and do not count as clean work
+time.
 
 Latest 100-image 64x64 run after the quality-focused upsampling update:
 
@@ -245,6 +257,13 @@ Run a WebP benchmark through the browser page:
 
 ```text
 http://127.0.0.1:8000/benchmarks.html?format=webp&manifest=/assets/benchmark-webps/manifest.json&limit=12&warmup=1
+```
+
+Or through the browser runner:
+
+```powershell
+$env:BENCHMARK_FORMAT='webp'
+node tools\run-jpeg-benchmark.js /assets/benchmark-webps/manifest.json 12 1 /wasm/jpeg-idct.wasm
 ```
 
 The WebP benchmark compares native browser decode against `WasmWebpDecoder`.

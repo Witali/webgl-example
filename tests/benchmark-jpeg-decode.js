@@ -243,14 +243,112 @@ function createDataset(loadedImages, totalBytes, totalPixels) {
   };
 }
 
+function getImageBlob(image, mimeType) {
+  if (!image.blobs) {
+    image.blobs = new Map();
+  }
+
+  if (!image.blobs.has(mimeType)) {
+    image.blobs.set(mimeType, new Blob([image.bytes], { type: mimeType }));
+  }
+
+  return image.blobs.get(mimeType);
+}
+
+function createPhaseTotals() {
+  return {
+    parseMs: 0,
+    setupMs: 0,
+    uploadMs: 0,
+    coreDecodeMs: 0,
+    gpuDecodeMs: 0,
+    wasmDecodeMs: 0,
+    readbackMs: 0,
+    totalDecoderMs: 0,
+    measuresCleanWork: true,
+    timedPhase: null,
+  };
+}
+
+function getWorkSample(decoded, fallbackMs) {
+  const timings = decoded && decoded.timings;
+
+  if (timings && Number.isFinite(timings.workMs)) {
+    return timings.workMs;
+  }
+
+  if (timings && Number.isFinite(timings.decodeMs)) {
+    return timings.decodeMs;
+  }
+
+  if (timings && Number.isFinite(timings.gpuDecodeMs)) {
+    return timings.gpuDecodeMs;
+  }
+
+  return fallbackMs;
+}
+
+function addPhaseTotals(totals, timings) {
+  if (!timings) {
+    return;
+  }
+
+  [
+    "parseMs",
+    "setupMs",
+    "uploadMs",
+    "coreDecodeMs",
+    "gpuDecodeMs",
+    "wasmDecodeMs",
+    "readbackMs",
+    "totalDecoderMs",
+  ].forEach((key) => {
+    if (Number.isFinite(timings[key])) {
+      totals[key] += timings[key];
+    }
+  });
+
+  if (timings.timedPhase && !totals.timedPhase) {
+    totals.timedPhase = timings.timedPhase;
+  }
+
+  if (timings.measuresCleanWork === false) {
+    totals.measuresCleanWork = false;
+  }
+}
+
+function applyPhaseTotals(summary, totals) {
+  Object.entries(totals).forEach(([key, value]) => {
+    if (key === "timedPhase") {
+      if (value) {
+        summary[key] = value;
+      }
+      return;
+    }
+
+    if (key === "measuresCleanWork") {
+      summary[key] = value;
+      return;
+    }
+
+    if (Number.isFinite(value) && value > 0) {
+      summary[key] = value;
+    }
+  });
+
+  if (!summary.timedPhase) {
+    summary.timedPhase = "Decoder API";
+  }
+}
+
 async function runNativeDecode(images, options) {
   const timings = [];
-  const startedAt = performance.now();
   const mimeType = options.mimeType || "image/jpeg";
 
   for (const image of images) {
+    const blob = getImageBlob(image, mimeType);
     const started = performance.now();
-    const bitmap = await createImageBitmap(new Blob([image.bytes], { type: mimeType }));
+    const bitmap = await createImageBitmap(blob);
     const elapsed = performance.now() - started;
 
     image.width = image.width || bitmap.width;
@@ -266,26 +364,31 @@ async function runNativeDecode(images, options) {
     return null;
   }
 
-  return summarizeTimings(timings, performance.now() - startedAt);
+  const summary = summarizeTimings(timings);
+
+  summary.measuresCleanWork = true;
+  summary.timedPhase = "Browser decode API";
+  return summary;
 }
 
 async function runAsyncPixelDecode(decoder, images, options) {
   const timings = [];
-  const startedAt = performance.now();
+  const phaseTotals = createPhaseTotals();
   let checksum = 0;
 
   for (const image of images) {
-    const buffer = image.bytes.slice(0);
     const started = performance.now();
-    const decoded = await decoder.decode(buffer);
+    const decoded = await decoder.decode(image.bytes);
     const elapsed = performance.now() - started;
+    const workMs = getWorkSample(decoded, elapsed);
 
     image.width = image.width || decoded.width;
     image.height = image.height || decoded.height;
     checksum = (checksum + decoded.pixels[0] + decoded.pixels[decoded.pixels.length - 4]) & 65535;
+    addPhaseTotals(phaseTotals, decoded.timings);
 
     if (options.collectTimings) {
-      timings.push(elapsed);
+      timings.push(workMs);
     }
   }
 
@@ -293,29 +396,31 @@ async function runAsyncPixelDecode(decoder, images, options) {
     return null;
   }
 
-  const summary = summarizeTimings(timings, performance.now() - startedAt);
+  const summary = summarizeTimings(timings);
 
   summary.checksum = checksum;
+  applyPhaseTotals(summary, phaseTotals);
   return summary;
 }
 
 function runWasmDecode(decoder, images, options) {
   const timings = [];
-  const startedAt = performance.now();
+  const phaseTotals = createPhaseTotals();
   let checksum = 0;
 
   for (const image of images) {
-    const buffer = image.bytes.slice(0);
     const started = performance.now();
-    const decoded = decoder.decode(buffer);
+    const decoded = decoder.decode(image.bytes);
     const elapsed = performance.now() - started;
+    const workMs = getWorkSample(decoded, elapsed);
 
     image.width = image.width || decoded.width;
     image.height = image.height || decoded.height;
     checksum = (checksum + decoded.pixels[0] + decoded.pixels[decoded.pixels.length - 4]) & 65535;
+    addPhaseTotals(phaseTotals, decoded.timings);
 
     if (options.collectTimings) {
-      timings.push(elapsed);
+      timings.push(workMs);
     }
   }
 
@@ -323,37 +428,38 @@ function runWasmDecode(decoder, images, options) {
     return null;
   }
 
-  const summary = summarizeTimings(timings, performance.now() - startedAt);
+  const summary = summarizeTimings(timings);
 
   summary.checksum = checksum;
+  applyPhaseTotals(summary, phaseTotals);
   return summary;
 }
 
 function runGpuDecode(gl, decoder, images, options) {
   const timings = [];
-  const startedAt = performance.now();
+  const phaseTotals = createPhaseTotals();
   let checksum = 0;
 
   for (const image of images) {
-    const buffer = image.bytes.slice(0);
     const started = performance.now();
-    const decoded = decoder.decode(buffer);
-
-    gl.finish();
+    const decoded = decoder.decode(image.bytes);
+    const elapsed = performance.now() - started;
+    const workMs = getWorkSample(decoded, elapsed);
 
     if (options.readback) {
+      const readbackStarted = performance.now();
       readTexture(gl, decoded.texture, decoded.width, decoded.height);
+      decoded.timings.readbackMs += performance.now() - readbackStarted;
     }
-
-    const elapsed = performance.now() - started;
 
     image.width = image.width || decoded.width;
     image.height = image.height || decoded.height;
     checksum = (checksum + decoded.width + decoded.height) & 65535;
+    addPhaseTotals(phaseTotals, decoded.timings);
     decoded.dispose();
 
     if (options.collectTimings) {
-      timings.push(elapsed);
+      timings.push(workMs);
     }
   }
 
@@ -361,21 +467,20 @@ function runGpuDecode(gl, decoder, images, options) {
     return null;
   }
 
-  const summary = summarizeTimings(timings, performance.now() - startedAt);
+  const summary = summarizeTimings(timings);
 
   summary.checksum = checksum;
+  applyPhaseTotals(summary, phaseTotals);
   return summary;
 }
 
 async function runWebGpuDecode(decoder, images, options) {
   const timings = [];
   let checksum = 0;
-  let uploadMs = 0;
-  let readbackMs = 0;
+  const phaseTotals = createPhaseTotals();
 
   for (const image of images) {
-    const buffer = image.bytes.slice(0);
-    const decoded = await decoder.decode(buffer);
+    const decoded = await decoder.decode(image.bytes);
 
     if (options.readback) {
       await decoded.readPixels();
@@ -384,11 +489,10 @@ async function runWebGpuDecode(decoder, images, options) {
     image.width = image.width || decoded.width;
     image.height = image.height || decoded.height;
     checksum = (checksum + decoded.width + decoded.height) & 65535;
-    uploadMs += decoded.timings.uploadMs;
-    readbackMs += decoded.timings.readbackMs;
+    addPhaseTotals(phaseTotals, decoded.timings);
 
     if (options.collectTimings) {
-      timings.push(decoded.timings.gpuDecodeMs);
+      timings.push(getWorkSample(decoded, decoded.timings.gpuDecodeMs));
     }
 
     decoded.dispose();
@@ -402,9 +506,7 @@ async function runWebGpuDecode(decoder, images, options) {
   const summary = summarizeTimings(timings, decodeMs);
 
   summary.checksum = checksum;
-  summary.uploadMs = uploadMs;
-  summary.readbackMs = readbackMs;
-  summary.measuresDecodeOnly = true;
+  applyPhaseTotals(summary, phaseTotals);
   return summary;
 }
 
@@ -435,7 +537,7 @@ function summarizeTimings(timings, totalMs) {
   const trimmedSum = trimmed.reduce((current, value) => current + value, 0);
 
   return {
-    totalMs,
+    totalMs: Number.isFinite(totalMs) ? totalMs : sum,
     measuredMs: sum,
     avgMs: sum / timings.length,
     trimmedAvgMs: trimmedSum / trimmed.length,
@@ -511,31 +613,35 @@ function createTimingTable(result) {
   const table = createTable(
     [
       "Decoder",
-      "Total",
-      "Measured",
+      "Timed phase",
+      "Work total",
       "Avg",
       "Trimmed avg",
       "Median",
       "P95",
       "Min",
       "Max",
+      "Setup/upload",
+      "Readback",
       "Samples",
     ],
     rows.map((row) => [
       row.label,
+      row.summary.timedPhase || "Decoder API",
       formatMs(row.summary.totalMs),
-      formatMs(row.summary.measuredMs),
       formatMs(row.summary.avgMs),
       formatMs(row.summary.trimmedAvgMs),
       formatMs(row.summary.medianMs),
       formatMs(row.summary.p95Ms),
       formatMs(row.summary.minMs),
       formatMs(row.summary.maxMs),
+      formatMs(getSetupOrUploadMs(row.summary)),
+      formatMs(row.summary.readbackMs),
       formatInteger(row.summary.samples),
     ])
   );
 
-  return createSection("Timings", table);
+  return createSection("Clean Work Timings", table);
 }
 
 function createReferenceSpeedupTable(result) {
@@ -630,6 +736,14 @@ function ratioAgainst(reference, target) {
     median: reference.medianMs / target.medianMs,
     trimmed: reference.trimmedAvgMs / target.trimmedAvgMs,
   };
+}
+
+function getSetupOrUploadMs(summary) {
+  if (Number.isFinite(summary.setupMs)) {
+    return summary.setupMs;
+  }
+
+  return summary.uploadMs;
 }
 
 function createSection(title, child) {

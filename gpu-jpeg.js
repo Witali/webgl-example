@@ -168,12 +168,28 @@
     }
 
     decode(arrayBuffer) {
+      const parseStarted = performance.now();
       const jpeg = JpegBaselineParser.parse(arrayBuffer);
-      return this.renderJpeg(jpeg);
+      const parseMs = performance.now() - parseStarted;
+
+      return this.renderJpeg(jpeg, { parseMs });
     }
 
-    renderJpeg(jpeg) {
+    renderJpeg(jpeg, baseTimings) {
       const gl = this.gl;
+      const timings = {
+        parseMs: baseTimings && Number.isFinite(baseTimings.parseMs)
+          ? baseTimings.parseMs
+          : 0,
+        setupMs: 0,
+        uploadMs: 0,
+        gpuDecodeMs: 0,
+        readbackMs: 0,
+        workMs: 0,
+        totalDecoderMs: 0,
+        measuresCleanWork: true,
+        timedPhase: "JPEG entropy parse + GPU shader",
+      };
 
       if (jpeg.components.length !== 1 && jpeg.components.length !== 3) {
         throw new Error("GpuJpegDecoder supports grayscale and YCbCr JPEG images.");
@@ -181,6 +197,7 @@
 
       this.ensureProgram();
 
+      const setupStarted = performance.now();
       const wasDepthTestEnabled = gl.isEnabled(gl.DEPTH_TEST);
       const wasCullFaceEnabled = gl.isEnabled(gl.CULL_FACE);
       const previousFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
@@ -210,7 +227,17 @@
       gl.useProgram(this.programInfo.program);
       this.bindQuad();
       this.bindCoefficientTextures(jpeg, coefficientTextures);
+
+      gl.finish();
+      timings.setupMs = performance.now() - setupStarted;
+      timings.uploadMs = timings.setupMs;
+
+      const gpuStarted = performance.now();
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.finish();
+      timings.gpuDecodeMs = performance.now() - gpuStarted;
+      timings.workMs = timings.parseMs + timings.gpuDecodeMs;
+      timings.totalDecoderMs = timings.parseMs + timings.setupMs + timings.gpuDecodeMs;
 
       coefficientTextures.forEach((texture) => gl.deleteTexture(texture));
       gl.deleteFramebuffer(framebuffer);
@@ -234,6 +261,7 @@
         width: jpeg.width,
         height: jpeg.height,
         texture: outputTexture,
+        timings,
         dispose() {
           gl.deleteTexture(outputTexture);
         },

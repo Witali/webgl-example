@@ -61,12 +61,17 @@
     }
 
     decode(arrayBuffer) {
+      const parseStarted = performance.now();
       const jpeg = global.GpuJpegDecoder.parse(arrayBuffer);
+      const parseMs = performance.now() - parseStarted;
+      const setupStarted = performance.now();
       const layout = this.createMemoryLayout(jpeg);
 
       this.ensureMemory(layout.totalBytes);
       this.ensureBasis();
       this.copyComponents(jpeg, layout);
+      const setupMs = performance.now() - setupStarted;
+      const wasmStarted = performance.now();
 
       if (this.exports.decodeFast) {
         this.decodeFast(jpeg, layout);
@@ -74,10 +79,25 @@
         this.decodeSlow(jpeg, layout);
       }
 
+      const wasmDecodeMs = performance.now() - wasmStarted;
+      const timings = {
+        parseMs,
+        setupMs,
+        uploadMs: setupMs,
+        wasmDecodeMs,
+        coreDecodeMs: wasmDecodeMs,
+        readbackMs: 0,
+        workMs: parseMs + wasmDecodeMs,
+        totalDecoderMs: parseMs + setupMs + wasmDecodeMs,
+        measuresCleanWork: true,
+        timedPhase: "JPEG entropy parse + WASM IDCT/color",
+      };
+
       return {
         width: jpeg.width,
         height: jpeg.height,
         pixels: new Uint8Array(this.memory.buffer, layout.outputPtr, jpeg.width * jpeg.height * 4),
+        timings,
       };
     }
 

@@ -25,8 +25,12 @@ const STATIC_ASSET_JPEGS = [
   "/assets/stone-texture.jpg",
   "/assets/stone-texture-wic.jpg",
 ];
+const MAX_BENCH_ASSET_OPTIONS = 2;
 const ASSET_JPEG_MANIFESTS = [
   "/assets/benchmark-jpegs/manifest.json",
+];
+const ASSET_WEBP_MANIFESTS = [
+  "/assets/webp-assets/manifest.json",
 ];
 const params = new URLSearchParams(window.location.search);
 
@@ -92,6 +96,8 @@ if (uploadButton && fileInput) {
     if (uploadedImageUrl && imageInput.value !== uploadedImageUrl) {
       releaseUploadedImage();
     }
+
+    syncDecoderToImage(imageInput.value);
   });
 }
 
@@ -463,26 +469,33 @@ async function initializeImageSelect() {
   const requestedImage = params.get("image") || DEFAULT_IMAGE_URL;
 
   try {
-    assetImageUrls = await loadAssetJpegUrls();
+    assetImageUrls = await loadAssetImageUrls();
   } catch (error) {
     setStatus(`Could not load asset image list: ${error && error.message ? error.message : error}`);
     assetImageUrls = STATIC_ASSET_JPEGS.slice();
   }
+
+  const selectedImage = assetImageUrls.includes(requestedImage) ||
+    !isBenchmarkFixtureUrl(requestedImage)
+    ? requestedImage
+    : DEFAULT_IMAGE_URL;
 
   imageInput.replaceChildren();
   assetImageUrls.forEach((url) => {
     addImageOption(url, formatAssetImageLabel(url));
   });
 
-  if (!assetImageUrls.includes(requestedImage)) {
-    addImageOption(requestedImage, formatAssetImageLabel(requestedImage));
+  if (!assetImageUrls.includes(selectedImage)) {
+    addImageOption(selectedImage, formatAssetImageLabel(selectedImage));
   }
 
-  imageInput.value = requestedImage;
+  imageInput.value = selectedImage;
+  syncDecoderToImage(selectedImage);
 }
 
-async function loadAssetJpegUrls() {
+async function loadAssetImageUrls() {
   const urls = new Set(STATIC_ASSET_JPEGS);
+  let benchAssetCount = 0;
 
   for (const manifestUrl of ASSET_JPEG_MANIFESTS) {
     const response = await fetch(manifestUrl);
@@ -493,8 +506,34 @@ async function loadAssetJpegUrls() {
 
     const manifest = await response.json();
 
+    manifest.forEach((url) => {
+      if (typeof url !== "string" || !isJpegUrl(url)) {
+        return;
+      }
+
+      if (isBenchmarkFixtureUrl(url)) {
+        if (benchAssetCount >= MAX_BENCH_ASSET_OPTIONS) {
+          return;
+        }
+
+        benchAssetCount += 1;
+      }
+
+      urls.add(url);
+    });
+  }
+
+  for (const manifestUrl of ASSET_WEBP_MANIFESTS) {
+    const response = await fetch(manifestUrl);
+
+    if (!response.ok) {
+      throw new Error(`${manifestUrl}: ${response.status}`);
+    }
+
+    const manifest = await response.json();
+
     manifest
-      .filter((url) => typeof url === "string" && isJpegUrl(url))
+      .filter((url) => typeof url === "string" && isWebpUrl(url))
       .forEach((url) => urls.add(url));
   }
 
@@ -521,6 +560,14 @@ function isJpegUrl(url) {
   return /\.jpe?g(?:[?#].*)?$/i.test(url);
 }
 
+function isWebpUrl(url) {
+  return /\.webp(?:[?#].*)?$/i.test(url);
+}
+
+function isBenchmarkFixtureUrl(url) {
+  return /\/bench-[^/]*\.jpe?g(?:[?#].*)?$/i.test(url);
+}
+
 function isSupportedImageFile(file) {
   return isJpegFile(file) || isWebpFile(file);
 }
@@ -539,6 +586,17 @@ function isWebpFile(file) {
   }
 
   return /\.webp$/i.test(file.name);
+}
+
+function syncDecoderToImage(url) {
+  if (isWebpUrl(url)) {
+    decoderSelect.value = "webp-wasm";
+    return;
+  }
+
+  if (decoderSelect.value === "webp-wasm") {
+    decoderSelect.value = "gpu";
+  }
 }
 
 function formatDecoderName(decoder) {

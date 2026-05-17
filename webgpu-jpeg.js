@@ -525,9 +525,14 @@
         renderBindGroup,
         timings: {
           uploadMs: performance.now() - setupStarted,
+          setupMs: 0,
           gpuDecodeMs: 0,
           decodeMs: 0,
           readbackMs: 0,
+          workMs: 0,
+          totalDecoderMs: 0,
+          measuresCleanWork: true,
+          timedPhase: "WebGPU compute passes",
         },
       };
     }
@@ -565,6 +570,9 @@
 
       prepared.timings.gpuDecodeMs = decodeMs;
       prepared.timings.decodeMs = decodeMs;
+      prepared.timings.setupMs = prepared.timings.uploadMs;
+      prepared.timings.workMs = decodeMs;
+      prepared.timings.totalDecoderMs = prepared.timings.uploadMs + decodeMs;
 
       if (prepared.buffers) {
         Object.values(prepared.buffers).forEach((buffer) => buffer.destroy());
