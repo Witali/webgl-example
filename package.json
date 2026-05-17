@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "build:wasm": "node tools/build-wasm.js",
+    "benchmark:jpeg": "node tools/run-jpeg-benchmark.js"
+  },
+  "devDependencies": {
+    "wabt": "^1.0.39"
+  }
+}

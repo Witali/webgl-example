@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebGL JPEG Demo</title>
+    <link rel="stylesheet" href="./home.css">
+  </head>
+  <body>
+    <main class="home-shell" aria-labelledby="page-title">
+      <header class="home-header">
+        <h1 id="page-title">WebGL JPEG Demo</h1>
+        <p>Small demos for the textured cube and JPEG decoding experiments.</p>
+      </header>
+
+      <nav class="demo-links" aria-label="Demo pages">
+        <a href="./cube.html">
+          <span>Cube</span>
+          <small>Rotating WebGL cube with the decoded stone texture.</small>
+        </a>
+        <a href="./image-decoding.html">
+          <span>Image decoding</span>
+          <small>Compare browser JPEG output with GPU, WASM, and WASM+GPU paths.</small>
+        </a>
+        <a href="./benchmarks.html">
+          <span>Benchmarks</span>
+          <small>Run native browser, WASM, WASM+GPU, and GPU JPEG decode timings.</small>
+        </a>
+      </nav>
+    </main>
+  </body>
+</html>

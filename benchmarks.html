@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JPEG Decode Benchmarks</title>
+    <link rel="stylesheet" href="./tests/visual-jpeg-compare.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <a class="back-link" href="./index.html">Home</a>
+          <h1>JPEG Decode Benchmarks</h1>
+        </div>
+      </header>
+
+      <pre id="result">BENCHMARK_RESULT_PENDING</pre>
+    </main>
+
+    <script src="./gpu-jpeg.js"></script>
+    <script src="./wasm-jpeg.js"></script>
+    <script src="./wasm-gpu-jpeg.js"></script>
+    <script src="./tests/benchmark-jpeg-decode.js"></script>
+  </body>
+</html>

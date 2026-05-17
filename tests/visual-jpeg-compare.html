@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JPEG Visual Compare</title>
+    <link rel="stylesheet" href="./visual-jpeg-compare.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>JPEG Visual Compare</h1>
+        <form id="controls">
+          <label>
+            Image
+            <input id="image-url" name="image" type="text" value="/assets/stone-texture-small.jpg">
+          </label>
+          <label>
+            Decoder
+            <select id="decoder" name="decoder">
+              <option value="gpu">GPU</option>
+              <option value="wasm">WASM</option>
+              <option value="wasm-gpu">WASM+GPU</option>
+            </select>
+          </label>
+          <label class="range-label">
+            <span>Diff contrast <output id="diff-scale-value" for="diff-scale">16x</output></span>
+            <input id="diff-scale" name="diffScale" type="range" min="1" max="64" step="1" value="16">
+          </label>
+          <button id="upload-button" type="button">Upload JPEG</button>
+          <input id="image-file" type="file" accept="image/jpeg,.jpg,.jpeg" hidden>
+          <button type="submit">Decode</button>
+        </form>
+      </header>
+
+      <section id="status" role="status">Ready</section>
+
+      <section class="metrics" aria-label="comparison metrics">
+        <div>
+          <span>Size</span>
+          <strong id="metric-size">-</strong>
+        </div>
+        <div>
+          <span>Mismatched pixels</span>
+          <strong id="metric-pixels">-</strong>
+        </div>
+        <div>
+          <span>Max channel diff</span>
+          <strong id="metric-max">-</strong>
+        </div>
+        <div>
+          <span>Mean byte diff</span>
+          <strong id="metric-mean">-</strong>
+        </div>
+      </section>
+
+      <section class="canvases" aria-label="visual comparison">
+        <figure>
+          <figcaption>Browser</figcaption>
+          <canvas id="browser-canvas"></canvas>
+        </figure>
+        <figure>
+          <figcaption>Library</figcaption>
+          <canvas id="library-canvas"></canvas>
+        </figure>
+        <figure>
+          <figcaption>Diff <span id="diff-scale-caption">16x</span></figcaption>
+          <canvas id="diff-canvas"></canvas>
+        </figure>
+      </section>
+    </main>
+
+    <script src="../gpu-jpeg.js"></script>
+    <script src="../wasm-jpeg.js"></script>
+    <script src="../wasm-gpu-jpeg.js"></script>
+    <script src="./visual-jpeg-compare.js"></script>
+  </body>
+</html>
