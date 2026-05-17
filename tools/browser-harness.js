@@ -69,6 +69,7 @@ async function runBrowserPage(options) {
         pagePath: options.pagePath,
         resultExpression: options.resultExpression,
         snapshotExpression: options.snapshotExpression,
+        targetTimeoutMs: options.targetTimeoutMs,
         timeoutMs: (options.timeoutMs || 120000) - 5000,
       })
         .then((result) => {
@@ -102,6 +103,7 @@ function createBrowserEnv() {
   delete env.EDGE_SWIFTSHADER;
   delete env.EDGE_PATH;
   delete env.CHROME_PATH;
+  delete env.BROWSER_TARGET_TIMEOUT_MS;
   delete env.BROWSER_TIMEOUT_MS;
   delete env.GPU_READBACK;
 
@@ -257,7 +259,11 @@ function createBrowserArgs({ debugPort, userDataDir, url }) {
 }
 
 async function pollForResult(options) {
-  const target = await waitForPageTarget(options.debugPort, options.pagePath);
+  const target = await waitForPageTarget(
+    options.debugPort,
+    options.pagePath,
+    options.targetTimeoutMs
+  );
   const client = await DevToolsWebSocket.connect(target.webSocketDebuggerUrl);
 
   try {
@@ -300,8 +306,12 @@ async function pollForResult(options) {
   }
 }
 
-async function waitForPageTarget(debugPort, pagePath) {
-  const deadline = Date.now() + 15000;
+async function waitForPageTarget(debugPort, pagePath, targetTimeoutMs) {
+  const requestedTimeoutMs = Number(targetTimeoutMs || process.env.BROWSER_TARGET_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+    ? requestedTimeoutMs
+    : 120000;
+  const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     try {
@@ -322,7 +332,7 @@ async function waitForPageTarget(debugPort, pagePath) {
     await delay(100);
   }
 
-  throw new Error("Timed out waiting for Edge DevTools target.");
+  throw new Error(`Timed out waiting for browser DevTools target after ${timeoutMs} ms.`);
 }
 
 function safeResolve(root, pathname) {

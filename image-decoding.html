@@ -23,11 +23,13 @@
           <label>
             Decoder
             <select id="decoder" name="decoder">
-              <option value="gpu">GPU</option>
-              <option value="webgpu">WebGPU resident</option>
-              <option value="wasm">WASM</option>
-              <option value="wasm-gpu">WASM+GPU</option>
-              <option value="webp-wasm">WASM WebP</option>
+              <option value="gpu">CPU-JS-Huff+GPU-IDCT</option>
+              <option value="webgpu">GPU-Huff+GPU-IDCT resident</option>
+              <option value="webgpu-prescan">CPU-JS-Prescan+GPU-Huff+GPU-IDCT</option>
+              <option value="wasm">CPU-WASM</option>
+              <option value="wasm-gpu">CPU-WASM+GPU-IDCT</option>
+              <option value="webp-js">WebP JS-only</option>
+              <option value="webp-wasm">WebP CPU-WASM</option>
             </select>
           </label>
           <label class="range-label">
@@ -81,6 +83,7 @@
     <script src="./webgpu-jpeg.js"></script>
     <script src="./wasm-jpeg.js"></script>
     <script src="./wasm-gpu-jpeg.js"></script>
+    <script src="./webp-js-decoder.js"></script>
     <script src="./webp-decoder.js"></script>
     <script src="./tests/visual-jpeg-compare.js"></script>
   </body>

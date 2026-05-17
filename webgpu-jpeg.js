@@ -14,6 +14,8 @@
 
   const COMPONENT_STRIDE = 8;
   const SCAN_STRIDE = 3;
+  const ENTROPY_INTERVAL_STRIDE = 4;
+  const ENTROPY_BLOCK_TASK_STRIDE = 8;
   const HUFFMAN_TABLE_SLOTS = 8;
   const HUFFMAN_CODE_LENGTHS = 17;
   const HUFFMAN_SYMBOL_STRIDE = 256;
@@ -31,6 +33,7 @@
     @group(0) @binding(4) var<storage, read> huffValOffset: array<i32>;
     @group(0) @binding(5) var<storage, read> huffSymbols: array<i32>;
     @group(0) @binding(6) var<storage, read_write> coeffs: array<i32>;
+    @group(0) @binding(7) var<storage, read> entropyIntervals: array<u32>;
 
     const ZIG_ZAG = array<u32, 64>(
       0u, 1u, 8u, 16u, 9u, 2u, 3u, 10u,
@@ -44,6 +47,7 @@
     );
 
     var<private> entropyOffset: u32;
+    var<private> entropyEnd: u32;
     var<private> bitBuffer: u32;
     var<private> bitCount: u32;
     var<private> previousDc0: i32;
@@ -68,7 +72,7 @@
 
     fn readEntropyByte() -> u32 {
       loop {
-        if (entropyOffset >= param(9u)) {
+        if (entropyOffset >= entropyEnd) {
           return 0u;
         }
 
@@ -82,7 +86,7 @@
         var marker = 255u;
 
         loop {
-          if (entropyOffset >= param(9u)) {
+          if (entropyOffset >= entropyEnd) {
             return 0u;
           }
 
@@ -253,44 +257,48 @@
 
     @compute @workgroup_size(1)
     fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-      if (id.x != 0u) {
+      if (id.x >= param(12u)) {
         return;
       }
 
-      entropyOffset = param(8u);
+      let intervalBase = id.x * 4u;
+      entropyOffset = entropyIntervals[intervalBase];
+      entropyEnd = entropyIntervals[intervalBase + 1u];
+      let startMcu = entropyIntervals[intervalBase + 2u];
+      let mcuCount = entropyIntervals[intervalBase + 3u];
       bitBuffer = 0u;
       bitCount = 0u;
       previousDc0 = 0i;
       previousDc1 = 0i;
       previousDc2 = 0i;
       let mcuCountX = param(5u);
-      let mcuCountY = param(6u);
       let scanComponentCount = param(11u);
 
-      for (var mcuY = 0u; mcuY < mcuCountY; mcuY = mcuY + 1u) {
-        for (var mcuX = 0u; mcuX < mcuCountX; mcuX = mcuX + 1u) {
-          for (var scanIndex = 0u; scanIndex < scanComponentCount; scanIndex = scanIndex + 1u) {
-            let scanBase = scanIndex * 3u;
-            let componentIndex = u32(scanComponent(scanIndex, 0u));
-            let dcSlot = u32(scanComponent(scanIndex, 1u));
-            let acSlot = u32(scanComponent(scanIndex, 2u));
-            let horizontalSampling = u32(component(componentIndex, 0u));
-            let verticalSampling = u32(component(componentIndex, 1u));
-            let blockCountX = u32(component(componentIndex, 2u));
+      for (var mcuOffset = 0u; mcuOffset < mcuCount; mcuOffset = mcuOffset + 1u) {
+        let mcuIndex = startMcu + mcuOffset;
+        let mcuY = mcuIndex / mcuCountX;
+        let mcuX = mcuIndex - mcuY * mcuCountX;
 
-            for (var localY = 0u; localY < verticalSampling; localY = localY + 1u) {
-              for (var localX = 0u; localX < horizontalSampling; localX = localX + 1u) {
-                let blockX = mcuX * horizontalSampling + localX;
-                let blockY = mcuY * verticalSampling + localY;
-                let blockIndex = blockY * blockCountX + blockX;
+        for (var scanIndex = 0u; scanIndex < scanComponentCount; scanIndex = scanIndex + 1u) {
+          let componentIndex = u32(scanComponent(scanIndex, 0u));
+          let dcSlot = u32(scanComponent(scanIndex, 1u));
+          let acSlot = u32(scanComponent(scanIndex, 2u));
+          let horizontalSampling = u32(component(componentIndex, 0u));
+          let verticalSampling = u32(component(componentIndex, 1u));
+          let blockCountX = u32(component(componentIndex, 2u));
 
-                decodeBlock(
-                  componentIndex,
-                  blockIndex,
-                  dcSlot,
-                  acSlot
-                );
-              }
+          for (var localY = 0u; localY < verticalSampling; localY = localY + 1u) {
+            for (var localX = 0u; localX < horizontalSampling; localX = localX + 1u) {
+              let blockX = mcuX * horizontalSampling + localX;
+              let blockY = mcuY * verticalSampling + localY;
+              let blockIndex = blockY * blockCountX + blockX;
+
+              decodeBlock(
+                componentIndex,
+                blockIndex,
+                dcSlot,
+                acSlot
+              );
             }
           }
         }
@@ -298,10 +306,334 @@
     }
   `;
 
-  const RENDER_SHADER = `
-    const PI = 3.141592653589793;
+  const PRESCAN_ENTROPY_SHADER = `
+    @group(0) @binding(0) var<storage, read> jpegBytes: array<u32>;
+    @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
+    @group(0) @binding(2) var<storage, read> huffMin: array<i32>;
+    @group(0) @binding(3) var<storage, read> huffMax: array<i32>;
+    @group(0) @binding(4) var<storage, read> huffValOffset: array<i32>;
+    @group(0) @binding(5) var<storage, read> huffSymbols: array<i32>;
+    @group(0) @binding(6) var<storage, read_write> coeffs: array<i32>;
+    @group(0) @binding(7) var<storage, read> blockTasks: array<i32>;
 
+    const ZIG_ZAG = array<u32, 64>(
+      0u, 1u, 8u, 16u, 9u, 2u, 3u, 10u,
+      17u, 24u, 32u, 25u, 18u, 11u, 4u, 5u,
+      12u, 19u, 26u, 33u, 40u, 48u, 41u, 34u,
+      27u, 20u, 13u, 6u, 7u, 14u, 21u, 28u,
+      35u, 42u, 49u, 56u, 57u, 50u, 43u, 36u,
+      29u, 22u, 15u, 23u, 30u, 37u, 44u, 51u,
+      58u, 59u, 52u, 45u, 38u, 31u, 39u, 46u,
+      53u, 60u, 61u, 54u, 47u, 55u, 62u, 63u
+    );
+
+    var<private> entropyOffset: u32;
+    var<private> entropyEnd: u32;
+    var<private> bitBuffer: u32;
+    var<private> bitCount: u32;
+
+    fn param(index: u32) -> u32 {
+      return u32(jpegMeta[index]);
+    }
+
+    fn quant(index: u32) -> i32 {
+      return jpegMeta[16u + index];
+    }
+
+    fn component(componentIndex: u32, field: u32) -> i32 {
+      return jpegMeta[272u + componentIndex * 8u + field];
+    }
+
+    fn task(taskIndex: u32, field: u32) -> i32 {
+      return blockTasks[taskIndex * 8u + field];
+    }
+
+    fn initializeReader(byteOffset: u32, bitOffset: u32, endOffset: u32) {
+      entropyOffset = byteOffset;
+      entropyEnd = endOffset;
+      bitBuffer = 0u;
+      bitCount = 0u;
+
+      if (bitOffset > 0u && byteOffset < entropyEnd) {
+        bitBuffer = jpegBytes[byteOffset];
+        entropyOffset = byteOffset + 1u;
+
+        if (bitBuffer == 255u && entropyOffset < entropyEnd && jpegBytes[entropyOffset] == 0u) {
+          entropyOffset = entropyOffset + 1u;
+        }
+
+        bitCount = 8u - bitOffset;
+      }
+    }
+
+    fn readEntropyByte() -> u32 {
+      loop {
+        if (entropyOffset >= entropyEnd) {
+          return 0u;
+        }
+
+        let value = jpegBytes[entropyOffset];
+        entropyOffset = entropyOffset + 1u;
+
+        if (value != 255u) {
+          return value;
+        }
+
+        var marker = 255u;
+
+        loop {
+          if (entropyOffset >= entropyEnd) {
+            return 0u;
+          }
+
+          marker = jpegBytes[entropyOffset];
+          entropyOffset = entropyOffset + 1u;
+
+          if (marker != 255u) {
+            break;
+          }
+        }
+
+        if (marker == 0u) {
+          return 255u;
+        }
+
+        if (marker >= 208u && marker <= 215u) {
+          bitBuffer = 0u;
+          bitCount = 0u;
+          continue;
+        }
+
+        return 0u;
+      }
+    }
+
+    fn readBit() -> u32 {
+      if (bitCount == 0u) {
+        bitBuffer = readEntropyByte();
+        bitCount = 8u;
+      }
+
+      bitCount = bitCount - 1u;
+      return (bitBuffer >> bitCount) & 1u;
+    }
+
+    fn readBits(count: u32) -> u32 {
+      var value = 0u;
+
+      for (var index = 0u; index < count; index = index + 1u) {
+        value = (value << 1u) | readBit();
+      }
+
+      return value;
+    }
+
+    fn decodeHuffman(slot: u32) -> u32 {
+      var code = 0i;
+      let tableBase = slot * 17u;
+
+      for (var length = 1u; length <= 16u; length = length + 1u) {
+        code = code * 2i + i32(readBit());
+
+        let minCode = huffMin[tableBase + length];
+        let maxCode = huffMax[tableBase + length];
+
+        if (maxCode >= 0i && code >= minCode && code <= maxCode) {
+          let symbolIndex = huffValOffset[tableBase + length] + code;
+          if (symbolIndex < 0i || symbolIndex >= 256i) {
+            return 0u;
+          }
+          return u32(huffSymbols[slot * 256u + u32(symbolIndex)]);
+        }
+      }
+
+      return 0u;
+    }
+
+    fn receiveAndExtend(size: u32) -> i32 {
+      if (size == 0u) {
+        return 0i;
+      }
+
+      let value = readBits(size);
+      let threshold = 1u << (size - 1u);
+
+      if (value < threshold) {
+        return i32(value) - i32((1u << size) - 1u);
+      }
+
+      return i32(value);
+    }
+
+    fn clearBlock(blockOffset: u32) {
+      for (var index = 0u; index < 64u; index = index + 1u) {
+        coeffs[blockOffset + index] = 0i;
+      }
+    }
+
+    fn decodeBlock(
+      componentIndex: u32,
+      blockIndex: u32,
+      dcSlot: u32,
+      acSlot: u32,
+      previousDc: i32
+    ) {
+      let coeffBase = u32(component(componentIndex, 4u));
+      let quantTable = u32(component(componentIndex, 5u));
+      let blockOffset = coeffBase + blockIndex * 64u;
+
+      clearBlock(blockOffset);
+
+      let dcLength = decodeHuffman(dcSlot);
+      let dcDiff = receiveAndExtend(dcLength);
+      let dc = previousDc + dcDiff;
+
+      coeffs[blockOffset] = dc * quant(quantTable * 64u);
+
+      var coefficientIndex = 1u;
+
+      loop {
+        if (coefficientIndex >= 64u) {
+          break;
+        }
+
+        let value = decodeHuffman(acSlot);
+        let runLength = value >> 4u;
+        let size = value & 15u;
+
+        if (size == 0u) {
+          if (runLength == 15u) {
+            coefficientIndex = coefficientIndex + 16u;
+            continue;
+          }
+
+          break;
+        }
+
+        coefficientIndex = coefficientIndex + runLength;
+
+        if (coefficientIndex >= 64u) {
+          break;
+        }
+
+        let naturalIndex = ZIG_ZAG[coefficientIndex];
+        let coefficient = receiveAndExtend(size);
+        coeffs[blockOffset + naturalIndex] =
+          coefficient * quant(quantTable * 64u + naturalIndex);
+        coefficientIndex = coefficientIndex + 1u;
+      }
+    }
+
+    @compute @workgroup_size(128)
+    fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+      let taskIndex = id.x;
+
+      if (taskIndex >= param(13u)) {
+        return;
+      }
+
+      initializeReader(
+        u32(task(taskIndex, 0u)),
+        u32(task(taskIndex, 1u)),
+        u32(task(taskIndex, 2u))
+      );
+      decodeBlock(
+        u32(task(taskIndex, 3u)),
+        u32(task(taskIndex, 4u)),
+        u32(task(taskIndex, 5u)),
+        u32(task(taskIndex, 6u)),
+        task(taskIndex, 7u)
+      );
+    }
+  `;
+
+  const IDCT_SHADER = `
     @group(0) @binding(0) var<storage, read> coeffs: array<i32>;
+    @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
+    @group(0) @binding(2) var<storage, read_write> componentPixels: array<i32>;
+
+    const IDCT_BASIS = array<f32, 64>(
+      0.7071067812f, 0.9807852804f, 0.9238795325f, 0.8314696123f,
+      0.7071067812f, 0.5555702330f, 0.3826834324f, 0.1950903220f,
+      0.7071067812f, 0.8314696123f, 0.3826834324f, -0.1950903220f,
+      -0.7071067812f, -0.9807852804f, -0.9238795325f, -0.5555702330f,
+      0.7071067812f, 0.5555702330f, -0.3826834324f, -0.9807852804f,
+      -0.7071067812f, 0.1950903220f, 0.9238795325f, 0.8314696123f,
+      0.7071067812f, 0.1950903220f, -0.9238795325f, -0.5555702330f,
+      0.7071067812f, 0.8314696123f, -0.3826834324f, -0.9807852804f,
+      0.7071067812f, -0.1950903220f, -0.9238795325f, 0.5555702330f,
+      0.7071067812f, -0.8314696123f, -0.3826834324f, 0.9807852804f,
+      0.7071067812f, -0.5555702330f, -0.3826834324f, 0.9807852804f,
+      -0.7071067812f, -0.1950903220f, 0.9238795325f, -0.8314696123f,
+      0.7071067812f, -0.8314696123f, 0.3826834324f, 0.1950903220f,
+      -0.7071067812f, 0.9807852804f, -0.9238795325f, 0.5555702330f,
+      0.7071067812f, -0.9807852804f, 0.9238795325f, -0.8314696123f,
+      0.7071067812f, -0.5555702330f, 0.3826834324f, -0.1950903220f
+    );
+
+    fn param(index: u32) -> u32 {
+      return u32(jpegMeta[index]);
+    }
+
+    fn component(componentIndex: u32, field: u32) -> i32 {
+      return jpegMeta[272u + componentIndex * 8u + field];
+    }
+
+    fn componentPixelCount(componentIndex: u32) -> u32 {
+      return u32(component(componentIndex, 2u) * component(componentIndex, 3u)) * 64u;
+    }
+
+    fn componentForOffset(offset: u32) -> u32 {
+      let componentCount = param(2u);
+      let count0 = componentPixelCount(0u);
+
+      if (offset < count0 || componentCount == 1u) {
+        return 0u;
+      }
+
+      let count1 = componentPixelCount(1u);
+
+      if (offset < count0 + count1 || componentCount == 2u) {
+        return 1u;
+      }
+
+      return 2u;
+    }
+
+    @compute @workgroup_size(128)
+    fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+      let pixelOffset = id.x;
+
+      if (pixelOffset >= param(7u)) {
+        return;
+      }
+
+      let componentIndex = componentForOffset(pixelOffset);
+      let coeffBase = u32(component(componentIndex, 4u));
+      let localOffset = pixelOffset - coeffBase;
+      let localIndex = localOffset % 64u;
+      let localX = localIndex & 7u;
+      let localY = localIndex >> 3u;
+      let blockOffset = pixelOffset - localIndex;
+      var value = 0.0;
+
+      for (var row = 0u; row < 8u; row = row + 1u) {
+        let yBasis = IDCT_BASIS[localY * 8u + row];
+
+        for (var column = 0u; column < 8u; column = column + 1u) {
+          let xBasis = IDCT_BASIS[localX * 8u + column];
+          let coefficient = f32(coeffs[blockOffset + row * 8u + column]);
+
+          value = value + coefficient * xBasis * yBasis;
+        }
+      }
+
+      componentPixels[pixelOffset] = i32(clamp(floor(0.25 * value + 128.0 + 0.5), 0.0, 255.0));
+    }
+  `;
+
+  const RENDER_SHADER = `
+    @group(0) @binding(0) var<storage, read> componentPixels: array<i32>;
     @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
     @group(0) @binding(2) var<storage, read_write> outputPixels: array<u32>;
 
@@ -313,18 +645,14 @@
       return jpegMeta[272u + componentIndex * 8u + field];
     }
 
-    fn basis(local: f32, frequency: f32) -> f32 {
-      return cos(((2.0 * local + 1.0) * frequency * PI) / 16.0);
-    }
-
     fn clampI32(value: i32, lower: i32, upper: i32) -> i32 {
       return min(max(value, lower), upper);
     }
 
-    fn decodeComponentPixel(componentIndex: u32, componentPixel: vec2<i32>) -> f32 {
+    fn sampleComponentPixel(componentIndex: u32, componentPixel: vec2<i32>) -> f32 {
       let blockCountX = component(componentIndex, 2u);
       let blockCountY = component(componentIndex, 3u);
-      let coeffBase = u32(component(componentIndex, 4u));
+      let componentBase = u32(component(componentIndex, 4u));
       let componentWidth = blockCountX * 8i;
       let componentHeight = blockCountY * 8i;
       let clampedPixel = vec2<i32>(
@@ -335,25 +663,10 @@
       let blockY = clampedPixel.y / 8i;
       let localX = clampedPixel.x % 8i;
       let localY = clampedPixel.y % 8i;
-      let blockOffset = coeffBase + u32(blockY * blockCountX + blockX) * 64u;
-      var value = 0.0;
+      let blockOffset = componentBase + u32(blockY * blockCountX + blockX) * 64u;
+      let pixelOffset = blockOffset + u32(localY * 8i + localX);
 
-      for (var row = 0u; row < 8u; row = row + 1u) {
-        for (var column = 0u; column < 8u; column = column + 1u) {
-          let scaleU = select(1.0, 0.70710678118, column == 0u);
-          let scaleV = select(1.0, 0.70710678118, row == 0u);
-          let coefficient = f32(coeffs[blockOffset + row * 8u + column]);
-
-          value = value +
-            scaleU *
-            scaleV *
-            coefficient *
-            basis(f32(localX), f32(column)) *
-            basis(f32(localY), f32(row));
-        }
-      }
-
-      return clamp(floor(0.25 * value + 128.0 + 0.5), 0.0, 255.0);
+      return f32(componentPixels[pixelOffset]);
     }
 
     fn decodeComponent(componentIndex: u32, imagePixel: vec2<u32>) -> f32 {
@@ -370,10 +683,10 @@
       let p0 = vec2<i32>(floor(componentCoord));
       let p1 = p0 + vec2<i32>(1, 1);
       let t = componentCoord - vec2<f32>(p0);
-      let v00 = decodeComponentPixel(componentIndex, p0);
-      let v10 = decodeComponentPixel(componentIndex, vec2<i32>(p1.x, p0.y));
-      let v01 = decodeComponentPixel(componentIndex, vec2<i32>(p0.x, p1.y));
-      let v11 = decodeComponentPixel(componentIndex, p1);
+      let v00 = sampleComponentPixel(componentIndex, p0);
+      let v10 = sampleComponentPixel(componentIndex, vec2<i32>(p1.x, p0.y));
+      let v01 = sampleComponentPixel(componentIndex, vec2<i32>(p0.x, p1.y));
+      let v11 = sampleComponentPixel(componentIndex, p1);
       let top = mix(v00, v10, t.x);
       let bottom = mix(v01, v11, t.x);
 
@@ -425,13 +738,16 @@
   `;
 
   class WebGpuJpegDecoder {
-    constructor(device) {
+    constructor(device, options = {}) {
       this.device = device;
+      this.entropyMode = options.entropyMode || "resident";
       this.entropyPipeline = null;
+      this.prescanEntropyPipeline = null;
+      this.idctPipeline = null;
       this.renderPipeline = null;
     }
 
-    static async create() {
+    static async create(options = {}) {
       if (!global.navigator || !global.navigator.gpu) {
         throw new Error("WebGpuJpegDecoder requires WebGPU.");
       }
@@ -443,7 +759,7 @@
       }
 
       const device = await adapter.requestDevice();
-      return new WebGpuJpegDecoder(device);
+      return new WebGpuJpegDecoder(device, options);
     }
 
     async decodeUrl(url) {
@@ -459,6 +775,11 @@
     prepare(arrayBuffer) {
       const setupStarted = performance.now();
       const jpeg = parseGpuResidentJpeg(arrayBuffer);
+      const preScanStarted = performance.now();
+      const blockTasks = this.entropyMode === "prescan"
+        ? createEntropyBlockTasks(jpeg)
+        : null;
+      const preScanMs = blockTasks ? performance.now() - preScanStarted : 0;
       const device = this.device;
       const jpegBytes = expandBytesToUint32(jpeg.bytes);
       const params = new Uint32Array([
@@ -474,9 +795,15 @@
         jpeg.scanEnd,
         jpeg.bytes.length,
         jpeg.scanComponents.length,
+        jpeg.entropyIntervals.length,
+        blockTasks ? blockTasks.count : 0,
       ]);
       const metadata = createMetadata(jpeg, params);
       const coefficientBuffer = device.createBuffer({
+        size: align(jpeg.totalCoefficientCount * 4, 4),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      });
+      const componentPixelBuffer = device.createBuffer({
         size: align(jpeg.totalCoefficientCount * 4, 4),
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
       });
@@ -491,11 +818,19 @@
         huffMax: createStorageBuffer(device, jpeg.huffMax),
         huffValOffset: createStorageBuffer(device, jpeg.huffValOffset),
         huffSymbols: createStorageBuffer(device, jpeg.huffSymbols),
+        entropyIntervals: createStorageBuffer(device, jpeg.entropyIntervalData),
       };
 
+      if (blockTasks) {
+        buffers.blockTasks = createStorageBuffer(device, blockTasks.data);
+      }
+
       this.ensurePipelines();
+      const entropyPipeline = this.entropyMode === "prescan"
+        ? this.prescanEntropyPipeline
+        : this.entropyPipeline;
       const entropyBindGroup = device.createBindGroup({
-        layout: this.entropyPipeline.getBindGroupLayout(0),
+        layout: entropyPipeline.getBindGroupLayout(0),
         entries: [
           bufferEntry(0, buffers.jpegBytes),
           bufferEntry(1, buffers.metadata),
@@ -504,12 +839,21 @@
           bufferEntry(4, buffers.huffValOffset),
           bufferEntry(5, buffers.huffSymbols),
           bufferEntry(6, coefficientBuffer),
+          bufferEntry(7, blockTasks ? buffers.blockTasks : buffers.entropyIntervals),
+        ],
+      });
+      const idctBindGroup = device.createBindGroup({
+        layout: this.idctPipeline.getBindGroupLayout(0),
+        entries: [
+          bufferEntry(0, coefficientBuffer),
+          bufferEntry(1, buffers.metadata),
+          bufferEntry(2, componentPixelBuffer),
         ],
       });
       const renderBindGroup = device.createBindGroup({
         layout: this.renderPipeline.getBindGroupLayout(0),
         entries: [
-          bufferEntry(0, coefficientBuffer),
+          bufferEntry(0, componentPixelBuffer),
           bufferEntry(1, buffers.metadata),
           bufferEntry(2, outputPixelBuffer),
         ],
@@ -520,11 +864,18 @@
         jpeg,
         buffers,
         coefficientBuffer,
+        componentPixelBuffer,
         outputPixelBuffer,
         entropyBindGroup,
+        entropyPipeline,
+        idctBindGroup,
         renderBindGroup,
+        entropyDispatchCount: blockTasks
+          ? Math.ceil(blockTasks.count / 128)
+          : jpeg.entropyIntervals.length,
         timings: {
-          uploadMs: performance.now() - setupStarted,
+          uploadMs: performance.now() - setupStarted - preScanMs,
+          preScanMs,
           setupMs: 0,
           gpuDecodeMs: 0,
           decodeMs: 0,
@@ -532,7 +883,9 @@
           workMs: 0,
           totalDecoderMs: 0,
           measuresCleanWork: true,
-          timedPhase: "WebGPU compute passes",
+          timedPhase: blockTasks
+            ? "CPU pre-scan + WebGPU compute passes"
+            : "WebGPU compute passes",
         },
       };
     }
@@ -541,17 +894,20 @@
       const device = prepared.device || this.device;
       const decodeStarted = performance.now();
 
-      const entropyEncoder = device.createCommandEncoder();
-      const entropyPass = entropyEncoder.beginComputePass();
-
-      entropyPass.setPipeline(this.entropyPipeline);
-      entropyPass.setBindGroup(0, prepared.entropyBindGroup);
-      entropyPass.dispatchWorkgroups(1);
-      entropyPass.end();
-      device.queue.submit([entropyEncoder.finish()]);
-      await device.queue.onSubmittedWorkDone();
-
       const encoder = device.createCommandEncoder();
+      const entropyPass = encoder.beginComputePass();
+
+      entropyPass.setPipeline(prepared.entropyPipeline);
+      entropyPass.setBindGroup(0, prepared.entropyBindGroup);
+      entropyPass.dispatchWorkgroups(prepared.entropyDispatchCount);
+      entropyPass.end();
+
+      const idctPass = encoder.beginComputePass();
+
+      idctPass.setPipeline(this.idctPipeline);
+      idctPass.setBindGroup(0, prepared.idctBindGroup);
+      idctPass.dispatchWorkgroups(Math.ceil(prepared.jpeg.totalCoefficientCount / 128));
+      idctPass.end();
 
       const renderPass = encoder.beginComputePass();
 
@@ -571,8 +927,10 @@
       prepared.timings.gpuDecodeMs = decodeMs;
       prepared.timings.decodeMs = decodeMs;
       prepared.timings.setupMs = prepared.timings.uploadMs;
-      prepared.timings.workMs = decodeMs;
-      prepared.timings.totalDecoderMs = prepared.timings.uploadMs + decodeMs;
+      prepared.timings.workMs = prepared.timings.preScanMs + decodeMs;
+      prepared.timings.totalDecoderMs = prepared.timings.uploadMs +
+        prepared.timings.preScanMs +
+        decodeMs;
 
       if (prepared.buffers) {
         Object.values(prepared.buffers).forEach((buffer) => buffer.destroy());
@@ -598,6 +956,7 @@
         },
         dispose() {
           prepared.coefficientBuffer.destroy();
+          prepared.componentPixelBuffer.destroy();
           prepared.outputPixelBuffer.destroy();
         },
       };
@@ -608,26 +967,57 @@
     }
 
     ensurePipelines() {
-      if (this.entropyPipeline && this.renderPipeline) {
+      const needsPreScan = this.entropyMode === "prescan";
+
+      if (
+        (needsPreScan ? this.prescanEntropyPipeline : this.entropyPipeline) &&
+        this.idctPipeline &&
+        this.renderPipeline
+      ) {
         return;
       }
 
       const device = this.device;
 
-      this.entropyPipeline = device.createComputePipeline({
-        layout: "auto",
-        compute: {
-          module: device.createShaderModule({ code: ENTROPY_SHADER }),
-          entryPoint: "main",
-        },
-      });
-      this.renderPipeline = device.createComputePipeline({
-        layout: "auto",
-        compute: {
-          module: device.createShaderModule({ code: RENDER_SHADER }),
-          entryPoint: "main",
-        },
-      });
+      if (!needsPreScan && !this.entropyPipeline) {
+        this.entropyPipeline = device.createComputePipeline({
+          layout: "auto",
+          compute: {
+            module: device.createShaderModule({ code: ENTROPY_SHADER }),
+            entryPoint: "main",
+          },
+        });
+      }
+
+      if (needsPreScan && !this.prescanEntropyPipeline) {
+        this.prescanEntropyPipeline = device.createComputePipeline({
+          layout: "auto",
+          compute: {
+            module: device.createShaderModule({ code: PRESCAN_ENTROPY_SHADER }),
+            entryPoint: "main",
+          },
+        });
+      }
+
+      if (!this.idctPipeline) {
+        this.idctPipeline = device.createComputePipeline({
+          layout: "auto",
+          compute: {
+            module: device.createShaderModule({ code: IDCT_SHADER }),
+            entryPoint: "main",
+          },
+        });
+      }
+
+      if (!this.renderPipeline) {
+        this.renderPipeline = device.createComputePipeline({
+          layout: "auto",
+          compute: {
+            module: device.createShaderModule({ code: RENDER_SHADER }),
+            entryPoint: "main",
+          },
+        });
+      }
     }
 
     static parseHeaders(arrayBuffer) {
@@ -701,10 +1091,6 @@
 
       if (!this.sawScan) {
         throw new Error("Invalid JPEG: scan data was not found.");
-      }
-
-      if (this.restartInterval !== 0) {
-        throw new Error("WebGpuJpegDecoder does not support restart intervals yet.");
       }
 
       return this.createJpegInfo();
@@ -862,6 +1248,8 @@
       const scanComponentData = new Int32Array(3 * SCAN_STRIDE);
       const huffman = buildGpuHuffmanTables(this.huffmanTables);
       let coefficientOffset = 0;
+      const totalMcuCount = mcuCountX * mcuCountY;
+      const entropyIntervals = this.createEntropyIntervals(totalMcuCount);
 
       this.components.forEach((component, index) => {
         component.blockCountX = mcuCountX * component.horizontalSampling;
@@ -896,8 +1284,12 @@
         maxVerticalSampling: this.maxVerticalSampling,
         mcuCountX,
         mcuCountY,
+        totalMcuCount,
+        restartInterval: this.restartInterval,
         scanStart: this.scanStart,
         scanEnd: this.scanEnd,
+        entropyIntervals,
+        entropyIntervalData: createEntropyIntervalData(entropyIntervals),
         scanComponents: this.scanComponents,
         componentData,
         scanComponentData,
@@ -908,6 +1300,74 @@
         huffValOffset: huffman.valOffset,
         huffSymbols: huffman.symbols,
       };
+    }
+
+    createEntropyIntervals(totalMcuCount) {
+      if (this.restartInterval === 0) {
+        return [{
+          start: this.scanStart,
+          end: this.scanEnd,
+          startMcu: 0,
+          mcuCount: totalMcuCount,
+        }];
+      }
+
+      const intervals = [];
+      let intervalStart = this.scanStart;
+      let startMcu = 0;
+      let index = this.scanStart;
+
+      while (index < this.scanEnd && startMcu < totalMcuCount) {
+        if (this.bytes[index] !== 0xff) {
+          index += 1;
+          continue;
+        }
+
+        let markerOffset = index + 1;
+
+        while (markerOffset < this.scanEnd && this.bytes[markerOffset] === 0xff) {
+          markerOffset += 1;
+        }
+
+        if (markerOffset >= this.scanEnd) {
+          break;
+        }
+
+        const marker = this.bytes[markerOffset];
+
+        if (marker === 0x00) {
+          index = markerOffset + 1;
+          continue;
+        }
+
+        if (marker >= 0xd0 && marker <= 0xd7) {
+          const mcuCount = Math.min(this.restartInterval, totalMcuCount - startMcu);
+
+          intervals.push({
+            start: intervalStart,
+            end: index,
+            startMcu,
+            mcuCount,
+          });
+          intervalStart = markerOffset + 1;
+          startMcu += mcuCount;
+          index = intervalStart;
+          continue;
+        }
+
+        break;
+      }
+
+      if (startMcu < totalMcuCount) {
+        intervals.push({
+          start: intervalStart,
+          end: this.scanEnd,
+          startMcu,
+          mcuCount: totalMcuCount - startMcu,
+        });
+      }
+
+      return intervals;
     }
 
     findScanEnd(start) {
@@ -979,6 +1439,233 @@
     return parser.parse();
   }
 
+  class EntropyBitReader {
+    constructor(bytes, start, end) {
+      this.bytes = bytes;
+      this.offset = start;
+      this.end = end;
+      this.bitBuffer = 0;
+      this.bitCount = 0;
+      this.bitByteOffset = start;
+    }
+
+    position() {
+      if (this.bitCount === 0) {
+        return {
+          byteOffset: this.offset,
+          bitOffset: 0,
+        };
+      }
+
+      return {
+        byteOffset: this.bitByteOffset,
+        bitOffset: 8 - this.bitCount,
+      };
+    }
+
+    readEntropyByte() {
+      while (this.offset < this.end) {
+        const byteOffset = this.offset;
+        const value = this.bytes[this.offset];
+
+        this.offset += 1;
+
+        if (value !== 0xff) {
+          this.bitByteOffset = byteOffset;
+          return value;
+        }
+
+        let markerOffset = this.offset;
+
+        while (markerOffset < this.end && this.bytes[markerOffset] === 0xff) {
+          markerOffset += 1;
+        }
+
+        if (markerOffset >= this.end) {
+          this.bitByteOffset = byteOffset;
+          return 0;
+        }
+
+        const marker = this.bytes[markerOffset];
+
+        this.offset = markerOffset + 1;
+
+        if (marker === 0x00) {
+          this.bitByteOffset = byteOffset;
+          return 0xff;
+        }
+
+        if (marker >= 0xd0 && marker <= 0xd7) {
+          this.bitBuffer = 0;
+          this.bitCount = 0;
+          continue;
+        }
+
+        this.bitByteOffset = byteOffset;
+        return 0;
+      }
+
+      this.bitByteOffset = this.offset;
+      return 0;
+    }
+
+    readBit() {
+      if (this.bitCount === 0) {
+        this.bitBuffer = this.readEntropyByte();
+        this.bitCount = 8;
+      }
+
+      this.bitCount -= 1;
+      return (this.bitBuffer >> this.bitCount) & 1;
+    }
+
+    readBits(count) {
+      let value = 0;
+
+      for (let index = 0; index < count; index += 1) {
+        value = (value << 1) | this.readBit();
+      }
+
+      return value;
+    }
+  }
+
+  function createEntropyBlockTasks(jpeg) {
+    const previousDc = new Int32Array(3);
+    const totalBlocks = jpeg.totalCoefficientCount / 64;
+    const taskData = new Int32Array(totalBlocks * ENTROPY_BLOCK_TASK_STRIDE);
+    let taskCount = 0;
+
+    jpeg.entropyIntervals.forEach((interval) => {
+      const reader = new EntropyBitReader(jpeg.bytes, interval.start, interval.end);
+
+      previousDc.fill(0);
+
+      for (let mcuOffset = 0; mcuOffset < interval.mcuCount; mcuOffset += 1) {
+        const mcuIndex = interval.startMcu + mcuOffset;
+        const mcuY = Math.floor(mcuIndex / jpeg.mcuCountX);
+        const mcuX = mcuIndex - mcuY * jpeg.mcuCountX;
+
+        for (let scanIndex = 0; scanIndex < jpeg.scanComponents.length; scanIndex += 1) {
+          const scanBase = scanIndex * SCAN_STRIDE;
+          const scan = {
+            componentIndex: jpeg.scanComponentData[scanBase],
+            dcSlot: jpeg.scanComponentData[scanBase + 1],
+            acSlot: jpeg.scanComponentData[scanBase + 2],
+          };
+          const component = jpeg.components[scan.componentIndex];
+
+          for (let localY = 0; localY < component.verticalSampling; localY += 1) {
+            for (let localX = 0; localX < component.horizontalSampling; localX += 1) {
+              const blockX = mcuX * component.horizontalSampling + localX;
+              const blockY = mcuY * component.verticalSampling + localY;
+              const blockIndex = blockY * component.blockCountX + blockX;
+              const position = reader.position();
+              const base = taskCount * ENTROPY_BLOCK_TASK_STRIDE;
+
+              taskData[base] = position.byteOffset;
+              taskData[base + 1] = position.bitOffset;
+              taskData[base + 2] = interval.end;
+              taskData[base + 3] = scan.componentIndex;
+              taskData[base + 4] = blockIndex;
+              taskData[base + 5] = scan.dcSlot;
+              taskData[base + 6] = scan.acSlot;
+              taskData[base + 7] = previousDc[scan.componentIndex];
+              taskCount += 1;
+
+              previousDc[scan.componentIndex] += readBlockForPreScan(
+                reader,
+                jpeg,
+                scan.dcSlot,
+                scan.acSlot
+              );
+            }
+          }
+        }
+      }
+    });
+
+    if (taskCount !== totalBlocks) {
+      throw new Error(`Invalid JPEG pre-scan: expected ${totalBlocks} blocks, got ${taskCount}.`);
+    }
+
+    return {
+      count: taskCount,
+      data: taskData.subarray(0, taskCount * ENTROPY_BLOCK_TASK_STRIDE),
+    };
+  }
+
+  function readBlockForPreScan(reader, jpeg, dcSlot, acSlot) {
+    const dcLength = decodeCpuHuffman(reader, jpeg, dcSlot);
+    const dcDiff = receiveAndExtendCpu(reader, dcLength);
+    let coefficientIndex = 1;
+
+    while (coefficientIndex < 64) {
+      const value = decodeCpuHuffman(reader, jpeg, acSlot);
+      const runLength = value >> 4;
+      const size = value & 15;
+
+      if (size === 0) {
+        if (runLength === 15) {
+          coefficientIndex += 16;
+          continue;
+        }
+
+        break;
+      }
+
+      coefficientIndex += runLength;
+
+      if (coefficientIndex >= 64) {
+        break;
+      }
+
+      reader.readBits(size);
+      coefficientIndex += 1;
+    }
+
+    return dcDiff;
+  }
+
+  function decodeCpuHuffman(reader, jpeg, slot) {
+    let code = 0;
+    const tableBase = slot * HUFFMAN_CODE_LENGTHS;
+
+    for (let length = 1; length <= 16; length += 1) {
+      code = code * 2 + reader.readBit();
+
+      const minCode = jpeg.huffMin[tableBase + length];
+      const maxCode = jpeg.huffMax[tableBase + length];
+
+      if (maxCode >= 0 && code >= minCode && code <= maxCode) {
+        const symbolIndex = jpeg.huffValOffset[tableBase + length] + code;
+
+        if (symbolIndex < 0 || symbolIndex >= HUFFMAN_SYMBOL_STRIDE) {
+          return 0;
+        }
+
+        return jpeg.huffSymbols[slot * HUFFMAN_SYMBOL_STRIDE + symbolIndex];
+      }
+    }
+
+    return 0;
+  }
+
+  function receiveAndExtendCpu(reader, size) {
+    if (size === 0) {
+      return 0;
+    }
+
+    const value = reader.readBits(size);
+    const threshold = 1 << (size - 1);
+
+    if (value < threshold) {
+      return value - ((1 << size) - 1);
+    }
+
+    return value;
+  }
+
   function buildGpuHuffmanTables(tables) {
     const min = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
     const max = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
@@ -1035,6 +1722,21 @@
     metadata.set(jpeg.scanComponentData, META_SCAN_OFFSET);
 
     return metadata;
+  }
+
+  function createEntropyIntervalData(intervals) {
+    const data = new Uint32Array(intervals.length * ENTROPY_INTERVAL_STRIDE);
+
+    intervals.forEach((interval, index) => {
+      const base = index * ENTROPY_INTERVAL_STRIDE;
+
+      data[base] = interval.start;
+      data[base + 1] = interval.end;
+      data[base + 2] = interval.startMcu;
+      data[base + 3] = interval.mcuCount;
+    });
+
+    return data;
   }
 
   function createStorageBuffer(device, data) {

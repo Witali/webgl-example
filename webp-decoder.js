@@ -1,7 +1,8 @@
 (function (global) {
   "use strict";
 
-  const WEBP_DECODE_MODULE_URL = "/assets/vendor/jsquash-webp/decode.js";
+  const WEBP_DECODER_FACTORY_URL = "/assets/vendor/jsquash-webp/codec/dec/webp_dec.js";
+  const WEBP_DECODER_WASM_URL = "/assets/vendor/jsquash-webp/codec/dec/webp_dec.wasm";
 
   let decodePromise = null;
 
@@ -43,10 +44,61 @@
 
   async function loadWebpDecode() {
     if (!decodePromise) {
-      decodePromise = import(WEBP_DECODE_MODULE_URL).then((module) => module.default);
+      decodePromise = loadWebpModuleFactory()
+        .then((moduleFactory) => {
+          const emscriptenModule = moduleFactory({
+            noInitialRun: true,
+            locateFile(path) {
+              return path === "webp_dec.wasm" ? WEBP_DECODER_WASM_URL : path;
+            },
+          });
+
+          return async function decode(buffer) {
+            const module = await emscriptenModule;
+            const result = module.decode(buffer);
+
+            if (!result) {
+              throw new Error("Decoding error");
+            }
+
+            return result;
+          };
+        })
+        .catch((error) => {
+          decodePromise = null;
+          throw new Error(
+            `Failed to load WebP decoder from ${WEBP_DECODER_FACTORY_URL}: ${
+              error && error.message ? error.message : error
+            }`
+          );
+        });
     }
 
     return decodePromise;
+  }
+
+  async function loadWebpModuleFactory() {
+    const response = await fetch(WEBP_DECODER_FACTORY_URL);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const source = await response.text();
+    const blob = new Blob([source], { type: "text/javascript" });
+    const moduleUrl = URL.createObjectURL(blob);
+
+    try {
+      const module = await import(moduleUrl);
+
+      if (typeof module.default !== "function") {
+        throw new Error("WebP decoder factory did not export a function.");
+      }
+
+      return module.default;
+    } finally {
+      URL.revokeObjectURL(moduleUrl);
+    }
   }
 
   global.WasmWebpDecoder = WasmWebpDecoder;

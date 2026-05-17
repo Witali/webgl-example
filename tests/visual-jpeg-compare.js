@@ -44,7 +44,9 @@ if (params.get("diffScale") && diffScaleInput) {
 
 let wasmDecoderPromise = null;
 let webGpuDecoderPromise = null;
+let webGpuPrescanDecoderPromise = null;
 let webpDecoderPromise = null;
+let webpJsDecoderPromise = null;
 let uploadedImageUrl = null;
 let lastDiffSource = null;
 let assetImageUrls = STATIC_ASSET_JPEGS.slice();
@@ -86,7 +88,7 @@ if (uploadButton && fileInput) {
     imageInput.value = uploadedImageUrl;
 
     if (isWebpFile(file)) {
-      decoderSelect.value = "webp-wasm";
+      decoderSelect.value = "webp-js";
     }
 
     runVisualCompare();
@@ -155,6 +157,22 @@ async function runVisualCompare() {
 }
 
 async function decodeWithLibrary(url, decoder) {
+  if (decoder === "webp-js") {
+    if (!webpJsDecoderPromise) {
+      webpJsDecoderPromise = JsWebpDecoder.create();
+    }
+
+    const webpDecoder = await webpJsDecoderPromise;
+    const decoded = await webpDecoder.decodeUrl(url);
+
+    return {
+      width: decoded.width,
+      height: decoded.height,
+      pixels: new Uint8ClampedArray(decoded.pixels),
+      timings: decoded.timings,
+    };
+  }
+
   if (decoder === "webp-wasm") {
     if (!webpDecoderPromise) {
       webpDecoderPromise = WasmWebpDecoder.create();
@@ -167,6 +185,7 @@ async function decodeWithLibrary(url, decoder) {
       width: decoded.width,
       height: decoded.height,
       pixels: new Uint8ClampedArray(decoded.pixels),
+      timings: decoded.timings,
     };
   }
 
@@ -191,12 +210,16 @@ async function decodeWithLibrary(url, decoder) {
     };
   }
 
-  if (decoder === "webgpu") {
-    if (!webGpuDecoderPromise) {
+  if (decoder === "webgpu" || decoder === "webgpu-prescan") {
+    const usePreScan = decoder === "webgpu-prescan";
+
+    if (usePreScan && !webGpuPrescanDecoderPromise) {
+      webGpuPrescanDecoderPromise = WebGpuJpegDecoder.create({ entropyMode: "prescan" });
+    } else if (!usePreScan && !webGpuDecoderPromise) {
       webGpuDecoderPromise = WebGpuJpegDecoder.create();
     }
 
-    const webGpuDecoder = await webGpuDecoderPromise;
+    const webGpuDecoder = await (usePreScan ? webGpuPrescanDecoderPromise : webGpuDecoderPromise);
     const decoded = await webGpuDecoder.decodeUrl(url);
     const pixels = await decoded.readPixels();
     const timings = { ...decoded.timings };
@@ -590,11 +613,13 @@ function isWebpFile(file) {
 
 function syncDecoderToImage(url) {
   if (isWebpUrl(url)) {
-    decoderSelect.value = "webp-wasm";
+    if (decoderSelect.value !== "webp-js" && decoderSelect.value !== "webp-wasm") {
+      decoderSelect.value = "webp-js";
+    }
     return;
   }
 
-  if (decoderSelect.value === "webp-wasm") {
+  if (decoderSelect.value === "webp-js" || decoderSelect.value === "webp-wasm") {
     decoderSelect.value = "gpu";
   }
 }
@@ -602,28 +627,43 @@ function syncDecoderToImage(url) {
 function formatDecoderName(decoder) {
   switch (decoder) {
     case "wasm":
-      return "WASM";
+      return "CPU-WASM";
     case "webgpu":
-      return "WebGPU resident";
+      return "GPU-Huff+GPU-IDCT resident";
+    case "webgpu-prescan":
+      return "CPU-JS-Prescan+GPU-Huff+GPU-IDCT";
     case "wasm-gpu":
-      return "WASM-GPU";
+      return "CPU-WASM+GPU-IDCT";
+    case "webp-js":
+      return "WebP JS-only";
     case "webp-wasm":
-      return "WASM WebP";
+      return "WebP CPU-WASM";
     default:
-      return "GPU";
+      return "CPU-JS-Huff+GPU-IDCT";
   }
 }
 
 function formatTimingStatus(timings) {
   if (!timings || !Number.isFinite(timings.gpuDecodeMs)) {
+    if (timings && Number.isFinite(timings.decodeMs)) {
+      return ` (${timings.decodeMs.toFixed(2)} ms decode${
+        Number.isFinite(timings.readbackMs) && timings.readbackMs > 0
+          ? `, ${timings.readbackMs.toFixed(2)} ms readback`
+          : ""
+      })`;
+    }
+
     return "";
   }
 
   return [
     ` (${timings.gpuDecodeMs.toFixed(2)} ms decode`,
+    Number.isFinite(timings.preScanMs) && timings.preScanMs > 0
+      ? `${timings.preScanMs.toFixed(2)} ms pre-scan`
+      : null,
     `${timings.uploadMs.toFixed(2)} ms upload`,
     `${timings.readbackMs.toFixed(2)} ms readback)`,
-  ].join(", ");
+  ].filter(Boolean).join(", ");
 }
 
 function releaseUploadedImage() {

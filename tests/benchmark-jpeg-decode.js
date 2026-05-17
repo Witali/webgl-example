@@ -50,30 +50,40 @@ async function runBenchmark() {
   const wasmDecoder = await WasmJpegDecoder.create(wasmUrl);
   const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
   const webGpuState = await createWebGpuState();
+  const webGpuPrescanState = await createWebGpuState({ entropyMode: "prescan" });
   const webGpuDecoder = webGpuState.decoder;
+  const webGpuPrescanDecoder = webGpuPrescanState.decoder;
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
 
   writeStatus(`warming native browser JPEG decoder (${warmupImages.length})`);
   await runNativeDecode(warmupImages, { collectTimings: false });
 
-  writeStatus(`warming WASM JPEG decoder (${warmupImages.length})`);
+  writeStatus(`warming CPU-WASM JPEG decoder (${warmupImages.length})`);
   runWasmDecode(wasmDecoder, warmupImages, { collectTimings: false });
 
-  writeStatus(`warming WASM+GPU JPEG decoder (${warmupImages.length})`);
+  writeStatus(`warming CPU-WASM+GPU-IDCT JPEG decoder (${warmupImages.length})`);
   runGpuDecode(gl, wasmGpuDecoder, warmupImages, {
     collectTimings: false,
     readback,
   });
 
   if (webGpuDecoder) {
-    writeStatus(`warming WebGPU resident JPEG decoder (${warmupImages.length})`);
+    writeStatus(`warming GPU-Huff+GPU-IDCT resident JPEG decoder (${warmupImages.length})`);
     await runWebGpuDecode(webGpuDecoder, warmupImages, {
       collectTimings: false,
       readback,
     });
   }
 
-  writeStatus(`warming GPU JPEG decoder (${warmupImages.length})`);
+  if (webGpuPrescanDecoder) {
+    writeStatus(`warming CPU-JS-Prescan+GPU-Huff+GPU-IDCT JPEG decoder (${warmupImages.length})`);
+    await runWebGpuDecode(webGpuPrescanDecoder, warmupImages, {
+      collectTimings: false,
+      readback,
+    });
+  }
+
+  writeStatus(`warming CPU-JS-Huff+GPU-IDCT JPEG decoder (${warmupImages.length})`);
   runGpuDecode(gl, gpuDecoder, warmupImages, {
     collectTimings: false,
     readback,
@@ -82,19 +92,20 @@ async function runBenchmark() {
   writeStatus(`benchmarking native browser JPEG decoder (${loadedImages.length})`);
   const nativeDecode = await runNativeDecode(loadedImages, { collectTimings: true });
 
-  writeStatus(`benchmarking WASM JPEG decoder (${loadedImages.length})`);
+  writeStatus(`benchmarking CPU-WASM JPEG decoder (${loadedImages.length})`);
   const wasmDecode = runWasmDecode(wasmDecoder, loadedImages, { collectTimings: true });
 
-  writeStatus(`benchmarking WASM+GPU JPEG decoder (${loadedImages.length})`);
+  writeStatus(`benchmarking CPU-WASM+GPU-IDCT JPEG decoder (${loadedImages.length})`);
   const wasmGpuDecode = runGpuDecode(gl, wasmGpuDecoder, loadedImages, {
     collectTimings: true,
     readback,
   });
 
   let webGpuDecode = null;
+  let webGpuPrescanDecode = null;
 
   if (webGpuDecoder) {
-    writeStatus(`benchmarking WebGPU resident JPEG decoder (${loadedImages.length})`);
+    writeStatus(`benchmarking GPU-Huff+GPU-IDCT resident JPEG decoder (${loadedImages.length})`);
     webGpuDecode = await runWebGpuDecode(webGpuDecoder, loadedImages, {
       collectTimings: true,
       readback,
@@ -103,7 +114,17 @@ async function runBenchmark() {
     webGpuDecode = createSkippedSummary(webGpuState.status, loadedImages.length);
   }
 
-  writeStatus(`benchmarking GPU JPEG decoder (${loadedImages.length})`);
+  if (webGpuPrescanDecoder) {
+    writeStatus(`benchmarking CPU-JS-Prescan+GPU-Huff+GPU-IDCT JPEG decoder (${loadedImages.length})`);
+    webGpuPrescanDecode = await runWebGpuDecode(webGpuPrescanDecoder, loadedImages, {
+      collectTimings: true,
+      readback,
+    });
+  } else if (includeWebGpu) {
+    webGpuPrescanDecode = createSkippedSummary(webGpuPrescanState.status, loadedImages.length);
+  }
+
+  writeStatus(`benchmarking CPU-JS-Huff+GPU-IDCT JPEG decoder (${loadedImages.length})`);
   const gpuDecode = runGpuDecode(gl, gpuDecoder, loadedImages, {
     collectTimings: true,
     readback,
@@ -126,12 +147,14 @@ async function runBenchmark() {
       includeWebGpu,
       webGpuMode,
       webGpuStatus: webGpuState.status,
+      webGpuPrescanStatus: webGpuPrescanState.status,
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
     wasmDecode,
     wasmGpuDecode,
     webGpuDecode,
+    webGpuPrescanDecode,
     gpuDecode,
     environment: {
       renderer: gl.getParameter(gl.RENDERER),
@@ -158,25 +181,34 @@ async function runWebpBenchmark() {
   writeStatus(`fetching ${urls.length} WebP files`);
 
   const loadedImages = await fetchImages(urls);
+  const webpJsDecoder = await JsWebpDecoder.create();
   const webpDecoder = await WasmWebpDecoder.create();
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
 
   writeStatus(`warming native browser WebP decoder (${warmupImages.length})`);
-  await runNativeDecode(warmupImages, {
+  await runNativeImageElementDecode(warmupImages, {
     collectTimings: false,
     mimeType: "image/webp",
   });
 
-  writeStatus(`warming WASM WebP decoder (${warmupImages.length})`);
+  writeStatus(`warming WebP JS-only decoder (${warmupImages.length})`);
+  await runAsyncPixelDecode(webpJsDecoder, warmupImages, { collectTimings: false });
+
+  writeStatus(`warming WebP CPU-WASM decoder (${warmupImages.length})`);
   await runAsyncPixelDecode(webpDecoder, warmupImages, { collectTimings: false });
 
   writeStatus(`benchmarking native browser WebP decoder (${loadedImages.length})`);
-  const nativeDecode = await runNativeDecode(loadedImages, {
+  const nativeDecode = await runNativeImageElementDecode(loadedImages, {
     collectTimings: true,
     mimeType: "image/webp",
   });
 
-  writeStatus(`benchmarking WASM WebP decoder (${loadedImages.length})`);
+  writeStatus(`benchmarking WebP JS-only decoder (${loadedImages.length})`);
+  const jsWebpDecode = await runAsyncPixelDecode(webpJsDecoder, loadedImages, {
+    collectTimings: true,
+  });
+
+  writeStatus(`benchmarking WebP CPU-WASM decoder (${loadedImages.length})`);
   const wasmWebpDecode = await runAsyncPixelDecode(webpDecoder, loadedImages, {
     collectTimings: true,
   });
@@ -196,6 +228,7 @@ async function runWebpBenchmark() {
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
+    jsWebpDecode,
     wasmWebpDecode,
     environment: {
       userAgent: navigator.userAgent,
@@ -249,7 +282,7 @@ function createDataset(loadedImages, totalBytes, totalPixels) {
   };
 }
 
-async function createWebGpuState() {
+async function createWebGpuState(options) {
   if (!includeWebGpu) {
     return {
       decoder: null,
@@ -266,7 +299,7 @@ async function createWebGpuState() {
 
   try {
     return {
-      decoder: await WebGpuJpegDecoder.create(),
+      decoder: await WebGpuJpegDecoder.create(options),
       status: "enabled",
     };
   } catch (error) {
@@ -313,6 +346,7 @@ function createPhaseTotals() {
     parseMs: 0,
     setupMs: 0,
     uploadMs: 0,
+    preScanMs: 0,
     coreDecodeMs: 0,
     gpuDecodeMs: 0,
     wasmDecodeMs: 0,
@@ -350,6 +384,7 @@ function addPhaseTotals(totals, timings) {
     "parseMs",
     "setupMs",
     "uploadMs",
+    "preScanMs",
     "coreDecodeMs",
     "gpuDecodeMs",
     "wasmDecodeMs",
@@ -422,6 +457,51 @@ async function runNativeDecode(images, options) {
   summary.measuresCleanWork = true;
   summary.timedPhase = "Browser decode API";
   return summary;
+}
+
+async function runNativeImageElementDecode(images, options) {
+  const timings = [];
+  const mimeType = options.mimeType || "image/jpeg";
+
+  for (const image of images) {
+    const blob = getImageBlob(image, mimeType);
+    const objectUrl = URL.createObjectURL(blob);
+    const started = performance.now();
+
+    try {
+      const imageElement = await loadBenchmarkImage(objectUrl);
+      const elapsed = performance.now() - started;
+
+      image.width = image.width || imageElement.naturalWidth;
+      image.height = image.height || imageElement.naturalHeight;
+
+      if (options.collectTimings) {
+        timings.push(elapsed);
+      }
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  if (!options.collectTimings) {
+    return null;
+  }
+
+  const summary = summarizeTimings(timings);
+
+  summary.measuresCleanWork = true;
+  summary.timedPhase = "Browser image element decode API";
+  return summary;
+}
+
+function loadBenchmarkImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", () => reject(new Error(`Failed to decode ${url}`)), { once: true });
+    image.src = url;
+  });
 }
 
 async function runAsyncPixelDecode(decoder, images, options) {
@@ -695,6 +775,7 @@ function createTimingTable(result) {
       "Min",
       "Max",
       "Setup/upload",
+      "Pre-scan",
       "Readback",
       "Samples",
       "Skipped",
@@ -710,6 +791,7 @@ function createTimingTable(result) {
       formatMs(row.summary.minMs),
       formatMs(row.summary.maxMs),
       formatMs(getSetupOrUploadMs(row.summary)),
+      formatMs(row.summary.preScanMs),
       formatMs(row.summary.readbackMs),
       formatInteger(row.summary.samples),
       formatInteger(row.summary.skipped),
@@ -764,12 +846,14 @@ function createRawJsonDetails(result) {
 
 function getTimingRows(result) {
   const rows = [
-    ["nativeDecode", "Native browser"],
-    ["wasmDecode", "WASM JPEG"],
-    ["wasmGpuDecode", "WASM+GPU JPEG"],
-    ["webGpuDecode", "WebGPU resident JPEG"],
-    ["gpuDecode", "GPU JPEG"],
-    ["wasmWebpDecode", "WASM WebP"],
+    ["nativeDecode", "Browser built-in"],
+    ["wasmDecode", "CPU-WASM"],
+    ["wasmGpuDecode", "CPU-WASM+GPU-IDCT"],
+    ["webGpuDecode", "GPU-Huff+GPU-IDCT resident"],
+    ["webGpuPrescanDecode", "CPU-JS-Prescan+GPU-Huff+GPU-IDCT"],
+    ["gpuDecode", "CPU-JS-Huff+GPU-IDCT"],
+    ["jsWebpDecode", "WebP JS-only"],
+    ["wasmWebpDecode", "WebP CPU-WASM"],
   ];
 
   return rows
