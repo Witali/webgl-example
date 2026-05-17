@@ -15,7 +15,8 @@ Open `index.html` through a local server to choose between:
 - `cube.html` for the textured rotating cube
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
-- `benchmarks.html` for native browser JPEG vs WASM JPEG decode timings
+- `benchmarks.html` for native browser, WASM, WASM+GPU, GPU, optional WebGPU
+  resident, and WebP decode timings
 
 ## `GpuJpegDecoder`
 
@@ -182,7 +183,7 @@ five public-domain landscape JPEG fixtures. Their source pages are listed in
 `assets/benchmark-jpegs/clipart-sources.json` and
 `assets/benchmark-jpegs/landscape-sources.json`.
 
-Run the native-browser-vs-WASM JPEG benchmark:
+Run the JPEG benchmark with native browser, WASM, WASM+GPU, and GPU decoders:
 
 ```powershell
 $env:BROWSER='edge'
@@ -215,7 +216,23 @@ default browser resolves to Edge, but that launch mode is blocked by policy with
 The benchmark fetches all JPEG files before timing. The native path measures
 `createImageBitmap()` decode time. The WASM path measures
 `WasmJpegDecoder.decode()`, which includes shared JS JPEG parsing/Huffman decode
-plus WASM IDCT and YCbCr to RGBA.
+plus WASM IDCT and YCbCr to RGBA. The WASM+GPU and GPU paths measure their
+decode calls plus `gl.finish()`, and optionally include texture readback when
+`GPU_READBACK=1`. The result page uses both native browser decode and WASM JPEG
+decode as reference columns in the speedup table.
+
+To include the experimental WebGPU-resident decoder, enable the WebGPU browser
+flag and keep the dataset to known SOF0 fixtures while the subset is still being
+expanded:
+
+```powershell
+$env:BROWSER_ENABLE_WEBGPU='1'
+$env:WEBGPU_JPEG='1'
+node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm/jpeg-idct.wasm
+```
+
+For this decoder, benchmark timings use `gpuDecodeMs`, so upload/setup and
+`readPixels()` readback are reported separately and do not count as decode time.
 
 Latest 100-image 64x64 run after the quality-focused upsampling update:
 
@@ -223,6 +240,14 @@ Latest 100-image 64x64 run after the quality-focused upsampling update:
 - WASM total: 241.9 ms, median: 2.0 ms, trimmed avg: 2.14 ms
 - Speedup values below 1 mean the tested path is slower than the reference.
   The native browser decoder remained fastest by trimmed average in this run.
+
+Run a WebP benchmark through the browser page:
+
+```text
+http://127.0.0.1:8000/benchmarks.html?format=webp&manifest=/assets/benchmark-webps/manifest.json&limit=12&warmup=1
+```
+
+The WebP benchmark compares native browser decode against `WasmWebpDecoder`.
 
 Run the demo through a local server so `fetch()` can read image and WASM files:
 

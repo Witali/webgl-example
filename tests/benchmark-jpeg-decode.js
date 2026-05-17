@@ -6,6 +6,8 @@ const wasmUrl = params.get("wasm") || "/wasm/jpeg-idct.wasm";
 const format = (params.get("format") || "jpeg").toLowerCase();
 const limit = Number(params.get("limit") || 100);
 const warmupCount = Number(params.get("warmup") || 3);
+const readback = params.get("readback") === "1";
+const includeWebGpu = params.get("webgpu") === "1";
 
 runBenchmark().catch((error) => {
   writeResult({
@@ -15,8 +17,13 @@ runBenchmark().catch((error) => {
 });
 
 async function runBenchmark() {
+  if (format === "webp") {
+    await runWebpBenchmark();
+    return;
+  }
+
   if (format !== "jpeg") {
-    throw new Error("This benchmark page compares only JPEG decoders.");
+    throw new Error(`Unsupported benchmark format: ${format}`);
   }
 
   writeStatus("loading manifest");
@@ -31,27 +38,78 @@ async function runBenchmark() {
   writeStatus(`fetching ${urls.length} JPEG files`);
 
   const loadedImages = await fetchImages(urls);
+  const glCanvas = document.createElement("canvas");
+  const gl = glCanvas.getContext("webgl", { preserveDrawingBuffer: true });
+
+  if (!gl) {
+    throw new Error("WebGL is not available in this browser.");
+  }
+
+  const gpuDecoder = new GpuJpegDecoder(gl);
   const wasmDecoder = await WasmJpegDecoder.create(wasmUrl);
+  const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
+  const webGpuDecoder = includeWebGpu ? await WebGpuJpegDecoder.create() : null;
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
 
-  writeStatus(`warming native browser decoder (${warmupImages.length})`);
+  writeStatus(`warming native browser JPEG decoder (${warmupImages.length})`);
   await runNativeDecode(warmupImages, { collectTimings: false });
 
-  writeStatus(`warming WASM decoder (${warmupImages.length})`);
+  writeStatus(`warming WASM JPEG decoder (${warmupImages.length})`);
   runWasmDecode(wasmDecoder, warmupImages, { collectTimings: false });
 
-  writeStatus(`benchmarking native browser decoder (${loadedImages.length})`);
+  writeStatus(`warming WASM+GPU JPEG decoder (${warmupImages.length})`);
+  runGpuDecode(gl, wasmGpuDecoder, warmupImages, {
+    collectTimings: false,
+    readback,
+  });
+
+  if (webGpuDecoder) {
+    writeStatus(`warming WebGPU resident JPEG decoder (${warmupImages.length})`);
+    await runWebGpuDecode(webGpuDecoder, warmupImages, {
+      collectTimings: false,
+      readback,
+    });
+  }
+
+  writeStatus(`warming GPU JPEG decoder (${warmupImages.length})`);
+  runGpuDecode(gl, gpuDecoder, warmupImages, {
+    collectTimings: false,
+    readback,
+  });
+
+  writeStatus(`benchmarking native browser JPEG decoder (${loadedImages.length})`);
   const nativeDecode = await runNativeDecode(loadedImages, { collectTimings: true });
 
-  writeStatus(`benchmarking WASM decoder (${loadedImages.length})`);
+  writeStatus(`benchmarking WASM JPEG decoder (${loadedImages.length})`);
   const wasmDecode = runWasmDecode(wasmDecoder, loadedImages, { collectTimings: true });
+
+  writeStatus(`benchmarking WASM+GPU JPEG decoder (${loadedImages.length})`);
+  const wasmGpuDecode = runGpuDecode(gl, wasmGpuDecoder, loadedImages, {
+    collectTimings: true,
+    readback,
+  });
+
+  let webGpuDecode = null;
+
+  if (webGpuDecoder) {
+    writeStatus(`benchmarking WebGPU resident JPEG decoder (${loadedImages.length})`);
+    webGpuDecode = await runWebGpuDecode(webGpuDecoder, loadedImages, {
+      collectTimings: true,
+      readback,
+    });
+  }
+
+  writeStatus(`benchmarking GPU JPEG decoder (${loadedImages.length})`);
+  const gpuDecode = runGpuDecode(gl, gpuDecoder, loadedImages, {
+    collectTimings: true,
+    readback,
+  });
 
   const totalBytes = loadedImages.reduce((sum, image) => sum + image.bytes.byteLength, 0);
   const totalPixels = loadedImages.reduce((sum, image) => {
     return sum + (image.width || 0) * (image.height || 0);
   }, 0);
-
-  writeResult({
+  const result = {
     ok: true,
     config: {
       format,
@@ -60,29 +118,86 @@ async function runBenchmark() {
       requestedLimit: limit,
       imageCount: loadedImages.length,
       warmupCount,
+      readback,
+      includeWebGpu,
     },
-    dataset: {
-      totalBytes,
-      totalPixels,
-      megapixels: totalPixels / 1000000,
-      firstImage: {
-        url: loadedImages[0].url,
-        width: loadedImages[0].width,
-        height: loadedImages[0].height,
-        bytes: loadedImages[0].bytes.byteLength,
-      },
-    },
+    dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
     wasmDecode,
-    speedup: {
-      wasmTotalVsNative: nativeDecode.totalMs / wasmDecode.totalMs,
-      wasmMedianVsNative: nativeDecode.medianMs / wasmDecode.medianMs,
-      wasmTrimmedAverageVsNative: nativeDecode.trimmedAvgMs / wasmDecode.trimmedAvgMs,
+    wasmGpuDecode,
+    webGpuDecode,
+    gpuDecode,
+    environment: {
+      renderer: gl.getParameter(gl.RENDERER),
+      vendor: gl.getParameter(gl.VENDOR),
+      floatTextures: Boolean(gl.getExtension("OES_texture_float")),
+      userAgent: navigator.userAgent,
     },
+  };
+
+  result.speedup = createReferenceSpeedups(result);
+  writeResult(result);
+}
+
+async function runWebpBenchmark() {
+  writeStatus("loading WebP manifest");
+
+  const manifest = await fetchJson(manifestUrl);
+  const urls = manifest.slice(0, limit);
+
+  if (urls.length === 0) {
+    throw new Error("Benchmark manifest is empty.");
+  }
+
+  writeStatus(`fetching ${urls.length} WebP files`);
+
+  const loadedImages = await fetchImages(urls);
+  const webpDecoder = await WasmWebpDecoder.create();
+  const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
+
+  writeStatus(`warming native browser WebP decoder (${warmupImages.length})`);
+  await runNativeDecode(warmupImages, {
+    collectTimings: false,
+    mimeType: "image/webp",
+  });
+
+  writeStatus(`warming WASM WebP decoder (${warmupImages.length})`);
+  await runAsyncPixelDecode(webpDecoder, warmupImages, { collectTimings: false });
+
+  writeStatus(`benchmarking native browser WebP decoder (${loadedImages.length})`);
+  const nativeDecode = await runNativeDecode(loadedImages, {
+    collectTimings: true,
+    mimeType: "image/webp",
+  });
+
+  writeStatus(`benchmarking WASM WebP decoder (${loadedImages.length})`);
+  const wasmWebpDecode = await runAsyncPixelDecode(webpDecoder, loadedImages, {
+    collectTimings: true,
+  });
+
+  const totalBytes = loadedImages.reduce((sum, image) => sum + image.bytes.byteLength, 0);
+  const totalPixels = loadedImages.reduce((sum, image) => {
+    return sum + (image.width || 0) * (image.height || 0);
+  }, 0);
+  const result = {
+    ok: true,
+    config: {
+      format,
+      manifest: manifestUrl,
+      requestedLimit: limit,
+      imageCount: loadedImages.length,
+      warmupCount,
+    },
+    dataset: createDataset(loadedImages, totalBytes, totalPixels),
+    nativeDecode,
+    wasmWebpDecode,
     environment: {
       userAgent: navigator.userAgent,
     },
-  });
+  };
+
+  result.speedup = createReferenceSpeedups(result);
+  writeResult(result);
 }
 
 async function fetchJson(url) {
@@ -114,13 +229,28 @@ async function fetchImages(urls) {
   }));
 }
 
+function createDataset(loadedImages, totalBytes, totalPixels) {
+  return {
+    totalBytes,
+    totalPixels,
+    megapixels: totalPixels / 1000000,
+    firstImage: {
+      url: loadedImages[0].url,
+      width: loadedImages[0].width,
+      height: loadedImages[0].height,
+      bytes: loadedImages[0].bytes.byteLength,
+    },
+  };
+}
+
 async function runNativeDecode(images, options) {
   const timings = [];
   const startedAt = performance.now();
+  const mimeType = options.mimeType || "image/jpeg";
 
   for (const image of images) {
     const started = performance.now();
-    const bitmap = await createImageBitmap(new Blob([image.bytes], { type: "image/jpeg" }));
+    const bitmap = await createImageBitmap(new Blob([image.bytes], { type: mimeType }));
     const elapsed = performance.now() - started;
 
     image.width = image.width || bitmap.width;
@@ -137,6 +267,36 @@ async function runNativeDecode(images, options) {
   }
 
   return summarizeTimings(timings, performance.now() - startedAt);
+}
+
+async function runAsyncPixelDecode(decoder, images, options) {
+  const timings = [];
+  const startedAt = performance.now();
+  let checksum = 0;
+
+  for (const image of images) {
+    const buffer = image.bytes.slice(0);
+    const started = performance.now();
+    const decoded = await decoder.decode(buffer);
+    const elapsed = performance.now() - started;
+
+    image.width = image.width || decoded.width;
+    image.height = image.height || decoded.height;
+    checksum = (checksum + decoded.pixels[0] + decoded.pixels[decoded.pixels.length - 4]) & 65535;
+
+    if (options.collectTimings) {
+      timings.push(elapsed);
+    }
+  }
+
+  if (!options.collectTimings) {
+    return null;
+  }
+
+  const summary = summarizeTimings(timings, performance.now() - startedAt);
+
+  summary.checksum = checksum;
+  return summary;
 }
 
 function runWasmDecode(decoder, images, options) {
@@ -167,6 +327,104 @@ function runWasmDecode(decoder, images, options) {
 
   summary.checksum = checksum;
   return summary;
+}
+
+function runGpuDecode(gl, decoder, images, options) {
+  const timings = [];
+  const startedAt = performance.now();
+  let checksum = 0;
+
+  for (const image of images) {
+    const buffer = image.bytes.slice(0);
+    const started = performance.now();
+    const decoded = decoder.decode(buffer);
+
+    gl.finish();
+
+    if (options.readback) {
+      readTexture(gl, decoded.texture, decoded.width, decoded.height);
+    }
+
+    const elapsed = performance.now() - started;
+
+    image.width = image.width || decoded.width;
+    image.height = image.height || decoded.height;
+    checksum = (checksum + decoded.width + decoded.height) & 65535;
+    decoded.dispose();
+
+    if (options.collectTimings) {
+      timings.push(elapsed);
+    }
+  }
+
+  if (!options.collectTimings) {
+    return null;
+  }
+
+  const summary = summarizeTimings(timings, performance.now() - startedAt);
+
+  summary.checksum = checksum;
+  return summary;
+}
+
+async function runWebGpuDecode(decoder, images, options) {
+  const timings = [];
+  let checksum = 0;
+  let uploadMs = 0;
+  let readbackMs = 0;
+
+  for (const image of images) {
+    const buffer = image.bytes.slice(0);
+    const decoded = await decoder.decode(buffer);
+
+    if (options.readback) {
+      await decoded.readPixels();
+    }
+
+    image.width = image.width || decoded.width;
+    image.height = image.height || decoded.height;
+    checksum = (checksum + decoded.width + decoded.height) & 65535;
+    uploadMs += decoded.timings.uploadMs;
+    readbackMs += decoded.timings.readbackMs;
+
+    if (options.collectTimings) {
+      timings.push(decoded.timings.gpuDecodeMs);
+    }
+
+    decoded.dispose();
+  }
+
+  if (!options.collectTimings) {
+    return null;
+  }
+
+  const decodeMs = timings.reduce((sum, value) => sum + value, 0);
+  const summary = summarizeTimings(timings, decodeMs);
+
+  summary.checksum = checksum;
+  summary.uploadMs = uploadMs;
+  summary.readbackMs = readbackMs;
+  summary.measuresDecodeOnly = true;
+  return summary;
+}
+
+function readTexture(gl, texture, width, height) {
+  const framebuffer = gl.createFramebuffer();
+  const pixels = new Uint8Array(width * height * 4);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    gl.COLOR_ATTACHMENT0,
+    gl.TEXTURE_2D,
+    texture,
+    0
+  );
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(framebuffer);
+
+  return pixels;
 }
 
 function summarizeTimings(timings, totalMs) {
@@ -226,10 +484,10 @@ function writeResult(result) {
   }
 
   resultEl.append(
-    createElement("h2", "JPEG decode benchmark"),
+    createElement("h2", `${formatName(result.config.format)} decode benchmark`),
     createSummaryGrid(result),
     createTimingTable(result),
-    createSpeedupTable(result),
+    createReferenceSpeedupTable(result),
     createRawJsonDetails(result)
   );
 }
@@ -237,7 +495,7 @@ function writeResult(result) {
 function createSummaryGrid(result) {
   const firstImage = result.dataset.firstImage || {};
   const items = [
-    ["Format", "JPEG"],
+    ["Format", formatName(result.config.format)],
     ["Images", formatInteger(result.config.imageCount)],
     ["Total bytes", formatBytes(result.dataset.totalBytes)],
     ["Total pixels", formatInteger(result.dataset.totalPixels)],
@@ -251,7 +509,18 @@ function createSummaryGrid(result) {
 function createTimingTable(result) {
   const rows = getTimingRows(result);
   const table = createTable(
-    ["Decoder", "Total", "Measured", "Avg", "Trimmed avg", "Median", "P95", "Min", "Max", "Samples"],
+    [
+      "Decoder",
+      "Total",
+      "Measured",
+      "Avg",
+      "Trimmed avg",
+      "Median",
+      "P95",
+      "Min",
+      "Max",
+      "Samples",
+    ],
     rows.map((row) => [
       row.label,
       formatMs(row.summary.totalMs),
@@ -269,19 +538,35 @@ function createTimingTable(result) {
   return createSection("Timings", table);
 }
 
-function createSpeedupTable(result) {
-  const speedup = result.speedup || {};
+function createReferenceSpeedupTable(result) {
+  const rows = getReferenceSpeedupRows(result);
+
+  if (rows.length === 0) {
+    return document.createDocumentFragment();
+  }
+
   const table = createTable(
-    ["Comparison", "Total", "Median", "Trimmed avg"],
-    [[
-      "WASM JPEG vs Native browser",
-      formatRatio(speedup.wasmTotalVsNative),
-      formatRatio(speedup.wasmMedianVsNative),
-      formatRatio(speedup.wasmTrimmedAverageVsNative),
-    ]]
+    [
+      "Decoder",
+      "vs Browser total",
+      "vs Browser median",
+      "vs Browser trimmed avg",
+      "vs WASM total",
+      "vs WASM median",
+      "vs WASM trimmed avg",
+    ],
+    rows.map((row) => [
+      row.label,
+      formatRatio(row.browser.total),
+      formatRatio(row.browser.median),
+      formatRatio(row.browser.trimmed),
+      formatRatio(row.wasm.total),
+      formatRatio(row.wasm.median),
+      formatRatio(row.wasm.trimmed),
+    ])
   );
 
-  return createSection("Speedups", table);
+  return createSection("Reference Speedups", table);
 }
 
 function createRawJsonDetails(result) {
@@ -297,10 +582,54 @@ function createRawJsonDetails(result) {
 }
 
 function getTimingRows(result) {
-  return [
-    { label: "Native browser JPEG", summary: result.nativeDecode },
-    { label: "WASM JPEG", summary: result.wasmDecode },
+  const rows = [
+    ["nativeDecode", "Native browser"],
+    ["wasmDecode", "WASM JPEG"],
+    ["wasmGpuDecode", "WASM+GPU JPEG"],
+    ["webGpuDecode", "WebGPU resident JPEG"],
+    ["gpuDecode", "GPU JPEG"],
+    ["wasmWebpDecode", "WASM WebP"],
   ];
+
+  return rows
+    .filter(([key]) => result[key])
+    .map(([key, label]) => ({
+      key,
+      label,
+      summary: result[key],
+    }));
+}
+
+function createReferenceSpeedups(result) {
+  return getReferenceSpeedupRows(result).map((row) => ({
+    decoder: row.label,
+    vsBrowser: row.browser,
+    vsWasm: row.wasm,
+  }));
+}
+
+function getReferenceSpeedupRows(result) {
+  const rows = getTimingRows(result);
+  const browserReference = result.nativeDecode;
+  const wasmReference = result.wasmDecode || result.wasmWebpDecode;
+
+  if (!browserReference || !wasmReference) {
+    return [];
+  }
+
+  return rows.map((row) => ({
+    label: row.label,
+    browser: ratioAgainst(browserReference, row.summary),
+    wasm: ratioAgainst(wasmReference, row.summary),
+  }));
+}
+
+function ratioAgainst(reference, target) {
+  return {
+    total: reference.totalMs / target.totalMs,
+    median: reference.medianMs / target.medianMs,
+    trimmed: reference.trimmedAvgMs / target.trimmedAvgMs,
+  };
 }
 
 function createSection(title, child) {
@@ -373,6 +702,10 @@ function createElement(tagName, text) {
   element.textContent = text;
 
   return element;
+}
+
+function formatName(value) {
+  return String(value || "").toUpperCase();
 }
 
 function formatMs(value) {
