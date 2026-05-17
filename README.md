@@ -45,6 +45,9 @@ The returned object has:
 `webp-decoder.js` wraps `@jsquash/webp`, which is a libwebp WebAssembly decoder.
 It returns RGBA pixels so the visual comparison page can compare browser WebP
 decode against an independent WASM decode path.
+The browser runtime files needed by this decoder are checked in under
+`assets/vendor/jsquash-webp`, so the demo does not need to serve files directly
+from `node_modules`.
 
 ```js
 const decoder = await WasmWebpDecoder.create();
@@ -230,17 +233,20 @@ copying coefficient blocks into WASM memory as setup. The WASM+GPU and GPU paths
 use JPEG entropy parse plus the GPU shader draw as clean work; texture creation,
 coefficient atlas packing, texture upload, and optional `GPU_READBACK=1` output
 readback stay in separate columns. The result page uses both native browser
-decode and WASM decode as reference columns in the speedup table.
+decode and WASM decode as reference columns in the speedup table. The JPEG
+benchmark also tries the experimental WebGPU-resident decoder by default. If
+WebGPU is unavailable, or if a JPEG falls outside that decoder's current SOF0
+baseline subset, the row stays visible and reports skipped images instead of
+failing the whole run.
 
-To include the experimental WebGPU-resident decoder, enable the WebGPU browser
-flag and keep the dataset to known SOF0 fixtures while the subset is still being
-expanded:
+To force-enable WebGPU in the browser runner, set the browser feature flag:
 
 ```powershell
 $env:BROWSER_ENABLE_WEBGPU='1'
-$env:WEBGPU_JPEG='1'
 node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm/jpeg-idct.wasm
 ```
+
+To disable the WebGPU-resident row, set `$env:WEBGPU_JPEG='0'`.
 
 For this decoder, benchmark timings use `gpuDecodeMs`, so upload/setup and
 `readPixels()` readback are reported separately and do not count as clean work

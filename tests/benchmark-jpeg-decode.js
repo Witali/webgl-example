@@ -7,7 +7,8 @@ const format = (params.get("format") || "jpeg").toLowerCase();
 const limit = Number(params.get("limit") || 100);
 const warmupCount = Number(params.get("warmup") || 3);
 const readback = params.get("readback") === "1";
-const includeWebGpu = params.get("webgpu") === "1";
+const webGpuMode = params.get("webgpu") || "auto";
+const includeWebGpu = webGpuMode !== "0";
 
 runBenchmark().catch((error) => {
   writeResult({
@@ -48,7 +49,8 @@ async function runBenchmark() {
   const gpuDecoder = new GpuJpegDecoder(gl);
   const wasmDecoder = await WasmJpegDecoder.create(wasmUrl);
   const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
-  const webGpuDecoder = includeWebGpu ? await WebGpuJpegDecoder.create() : null;
+  const webGpuState = await createWebGpuState();
+  const webGpuDecoder = webGpuState.decoder;
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
 
   writeStatus(`warming native browser JPEG decoder (${warmupImages.length})`);
@@ -97,6 +99,8 @@ async function runBenchmark() {
       collectTimings: true,
       readback,
     });
+  } else if (includeWebGpu) {
+    webGpuDecode = createSkippedSummary(webGpuState.status, loadedImages.length);
   }
 
   writeStatus(`benchmarking GPU JPEG decoder (${loadedImages.length})`);
@@ -120,6 +124,8 @@ async function runBenchmark() {
       warmupCount,
       readback,
       includeWebGpu,
+      webGpuMode,
+      webGpuStatus: webGpuState.status,
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
@@ -243,6 +249,34 @@ function createDataset(loadedImages, totalBytes, totalPixels) {
   };
 }
 
+async function createWebGpuState() {
+  if (!includeWebGpu) {
+    return {
+      decoder: null,
+      status: "disabled",
+    };
+  }
+
+  if (!globalThis.navigator || !globalThis.navigator.gpu) {
+    return {
+      decoder: null,
+      status: "navigator.gpu is not available",
+    };
+  }
+
+  try {
+    return {
+      decoder: await WebGpuJpegDecoder.create(),
+      status: "enabled",
+    };
+  } catch (error) {
+    return {
+      decoder: null,
+      status: error && error.message ? error.message : String(error),
+    };
+  }
+}
+
 function getImageBlob(image, mimeType) {
   if (!image.blobs) {
     image.blobs = new Map();
@@ -253,6 +287,25 @@ function getImageBlob(image, mimeType) {
   }
 
   return image.blobs.get(mimeType);
+}
+
+function createSkippedSummary(reason, skipped) {
+  return {
+    totalMs: NaN,
+    measuredMs: 0,
+    avgMs: NaN,
+    trimmedAvgMs: NaN,
+    trimmedMeasuredMs: 0,
+    minMs: NaN,
+    medianMs: NaN,
+    p95Ms: NaN,
+    maxMs: NaN,
+    samples: 0,
+    skipped,
+    skipReason: reason,
+    timedPhase: reason,
+    measuresCleanWork: true,
+  };
 }
 
 function createPhaseTotals() {
@@ -478,9 +531,23 @@ async function runWebGpuDecode(decoder, images, options) {
   const timings = [];
   let checksum = 0;
   const phaseTotals = createPhaseTotals();
+  let skipped = 0;
+  let skipReason = "";
 
   for (const image of images) {
-    const decoded = await decoder.decode(image.bytes);
+    let decoded;
+
+    try {
+      decoded = await decoder.decode(image.bytes);
+    } catch (error) {
+      skipped += 1;
+
+      if (!skipReason) {
+        skipReason = error && error.message ? error.message : String(error);
+      }
+
+      continue;
+    }
 
     if (options.readback) {
       await decoded.readPixels();
@@ -502,10 +569,16 @@ async function runWebGpuDecode(decoder, images, options) {
     return null;
   }
 
+  if (timings.length === 0) {
+    return createSkippedSummary(skipReason || "No WebGPU-resident compatible images", skipped);
+  }
+
   const decodeMs = timings.reduce((sum, value) => sum + value, 0);
   const summary = summarizeTimings(timings, decodeMs);
 
   summary.checksum = checksum;
+  summary.skipped = skipped;
+  summary.skipReason = skipReason;
   applyPhaseTotals(summary, phaseTotals);
   return summary;
 }
@@ -624,6 +697,7 @@ function createTimingTable(result) {
       "Setup/upload",
       "Readback",
       "Samples",
+      "Skipped",
     ],
     rows.map((row) => [
       row.label,
@@ -638,6 +712,7 @@ function createTimingTable(result) {
       formatMs(getSetupOrUploadMs(row.summary)),
       formatMs(row.summary.readbackMs),
       formatInteger(row.summary.samples),
+      formatInteger(row.summary.skipped),
     ])
   );
 

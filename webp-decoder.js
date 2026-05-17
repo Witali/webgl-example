@@ -1,7 +1,7 @@
 (function (global) {
   "use strict";
 
-  const WEBP_DECODE_MODULE_URL = "/node_modules/@jsquash/webp/decode.js";
+  const WEBP_DECODE_MODULE_URL = "/assets/vendor/jsquash-webp/decode.js";
 
   let decodePromise = null;
 
