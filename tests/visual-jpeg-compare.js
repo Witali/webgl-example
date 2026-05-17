@@ -105,6 +105,7 @@ async function runVisualCompare() {
     setStatus(`Loading ${imageUrl}`);
     resetMetrics();
     lastDiffSource = null;
+    window.__webGpuResidentTimings = null;
 
     const [browserDecoded, libraryDecoded] = await Promise.all([
       decodeWithBrowser(imageUrl),
@@ -139,7 +140,9 @@ async function runVisualCompare() {
     drawPixels(libraryCanvas, libraryDecoded);
     redrawDiffImage();
     updateMetrics(browserDecoded.width, browserDecoded.height, comparison);
-    setStatus(`Loaded with ${formatDecoderName(decoder)} decoder`);
+    setStatus(
+      `Loaded with ${formatDecoderName(decoder)} decoder${formatTimingStatus(libraryDecoded.timings)}`
+    );
   } catch (error) {
     setStatus(error && error.stack ? error.stack : String(error));
   }
@@ -190,13 +193,16 @@ async function decodeWithLibrary(url, decoder) {
     const webGpuDecoder = await webGpuDecoderPromise;
     const decoded = await webGpuDecoder.decodeUrl(url);
     const pixels = await decoded.readPixels();
+    const timings = { ...decoded.timings };
 
     decoded.dispose();
+    window.__webGpuResidentTimings = timings;
 
     return {
       width: decoded.width,
       height: decoded.height,
       pixels: new Uint8ClampedArray(pixels),
+      timings,
     };
   }
 
@@ -548,6 +554,18 @@ function formatDecoderName(decoder) {
     default:
       return "GPU";
   }
+}
+
+function formatTimingStatus(timings) {
+  if (!timings || !Number.isFinite(timings.gpuDecodeMs)) {
+    return "";
+  }
+
+  return [
+    ` (${timings.gpuDecodeMs.toFixed(2)} ms decode`,
+    `${timings.uploadMs.toFixed(2)} ms upload`,
+    `${timings.readbackMs.toFixed(2)} ms readback)`,
+  ].join(", ");
 }
 
 function releaseUploadedImage() {

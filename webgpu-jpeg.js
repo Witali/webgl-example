@@ -456,7 +456,8 @@
       return this.decode(await response.arrayBuffer());
     }
 
-    async decode(arrayBuffer) {
+    prepare(arrayBuffer) {
+      const setupStarted = performance.now();
       const jpeg = parseGpuResidentJpeg(arrayBuffer);
       const device = this.device;
       const jpegBytes = expandBytesToUint32(jpeg.bytes);
@@ -493,12 +494,7 @@
       };
 
       this.ensurePipelines();
-
-      const entropyEncoder = device.createCommandEncoder();
-      const entropyPass = entropyEncoder.beginComputePass();
-
-      entropyPass.setPipeline(this.entropyPipeline);
-      entropyPass.setBindGroup(0, device.createBindGroup({
+      const entropyBindGroup = device.createBindGroup({
         layout: this.entropyPipeline.getBindGroupLayout(0),
         entries: [
           bufferEntry(0, buffers.jpegBytes),
@@ -509,7 +505,42 @@
           bufferEntry(5, buffers.huffSymbols),
           bufferEntry(6, coefficientBuffer),
         ],
-      }));
+      });
+      const renderBindGroup = device.createBindGroup({
+        layout: this.renderPipeline.getBindGroupLayout(0),
+        entries: [
+          bufferEntry(0, coefficientBuffer),
+          bufferEntry(1, buffers.metadata),
+          bufferEntry(2, outputPixelBuffer),
+        ],
+      });
+
+      return {
+        device,
+        jpeg,
+        buffers,
+        coefficientBuffer,
+        outputPixelBuffer,
+        entropyBindGroup,
+        renderBindGroup,
+        timings: {
+          uploadMs: performance.now() - setupStarted,
+          gpuDecodeMs: 0,
+          decodeMs: 0,
+          readbackMs: 0,
+        },
+      };
+    }
+
+    async decodePrepared(prepared) {
+      const device = prepared.device || this.device;
+      const decodeStarted = performance.now();
+
+      const entropyEncoder = device.createCommandEncoder();
+      const entropyPass = entropyEncoder.beginComputePass();
+
+      entropyPass.setPipeline(this.entropyPipeline);
+      entropyPass.setBindGroup(0, prepared.entropyBindGroup);
       entropyPass.dispatchWorkgroups(1);
       entropyPass.end();
       device.queue.submit([entropyEncoder.finish()]);
@@ -520,34 +551,52 @@
       const renderPass = encoder.beginComputePass();
 
       renderPass.setPipeline(this.renderPipeline);
-      renderPass.setBindGroup(0, device.createBindGroup({
-        layout: this.renderPipeline.getBindGroupLayout(0),
-        entries: [
-          bufferEntry(0, coefficientBuffer),
-          bufferEntry(1, buffers.metadata),
-          bufferEntry(2, outputPixelBuffer),
-        ],
-      }));
-      renderPass.dispatchWorkgroups(Math.ceil(jpeg.width / 8), Math.ceil(jpeg.height / 8));
+      renderPass.setBindGroup(0, prepared.renderBindGroup);
+      renderPass.dispatchWorkgroups(
+        Math.ceil(prepared.jpeg.width / 8),
+        Math.ceil(prepared.jpeg.height / 8)
+      );
       renderPass.end();
 
       device.queue.submit([encoder.finish()]);
       await device.queue.onSubmittedWorkDone();
 
-      Object.values(buffers).forEach((buffer) => buffer.destroy());
+      const decodeMs = performance.now() - decodeStarted;
+
+      prepared.timings.gpuDecodeMs = decodeMs;
+      prepared.timings.decodeMs = decodeMs;
+
+      if (prepared.buffers) {
+        Object.values(prepared.buffers).forEach((buffer) => buffer.destroy());
+        prepared.buffers = null;
+      }
 
       return {
-        width: jpeg.width,
-        height: jpeg.height,
-        gpuBuffer: outputPixelBuffer,
+        width: prepared.jpeg.width,
+        height: prepared.jpeg.height,
+        gpuBuffer: prepared.outputPixelBuffer,
+        timings: prepared.timings,
         async readPixels() {
-          return readPixelBuffer(device, outputPixelBuffer, jpeg.width, jpeg.height);
+          const readbackStarted = performance.now();
+          const pixels = await readPixelBuffer(
+            device,
+            prepared.outputPixelBuffer,
+            prepared.jpeg.width,
+            prepared.jpeg.height
+          );
+
+          prepared.timings.readbackMs += performance.now() - readbackStarted;
+          return pixels;
         },
         dispose() {
-          coefficientBuffer.destroy();
-          outputPixelBuffer.destroy();
+          prepared.coefficientBuffer.destroy();
+          prepared.outputPixelBuffer.destroy();
         },
       };
+    }
+
+    async decode(arrayBuffer) {
+      return this.decodePrepared(this.prepare(arrayBuffer));
     }
 
     ensurePipelines() {

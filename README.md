@@ -15,8 +15,7 @@ Open `index.html` through a local server to choose between:
 - `cube.html` for the textured rotating cube
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
-- `benchmarks.html` for native browser, JPEG WASM/WASM+GPU/GPU, and WebP WASM
-  decode timings
+- `benchmarks.html` for native browser JPEG vs WASM JPEG decode timings
 
 ## `GpuJpegDecoder`
 
@@ -58,6 +57,18 @@ uploads the JPEG byte stream to a WebGPU storage buffer and runs Huffman entropy
 decode, dequantization, IDCT, YCbCr upsampling, and RGBA output in GPU compute
 passes. JavaScript still parses JPEG headers and tables so the browser can
 allocate the required GPU buffers.
+
+For timing, use `result.timings.gpuDecodeMs` or its alias
+`result.timings.decodeMs`. That value starts after JPEG data and metadata have
+already been prepared in GPU buffers and stops before any `readPixels()`
+download. Upload/setup time is reported separately as `uploadMs`, and output
+readback is accumulated separately as `readbackMs`.
+
+```js
+const prepared = decoder.prepare(arrayBuffer);
+const result = await decoder.decodePrepared(prepared);
+console.log(result.timings.gpuDecodeMs); // decode passes only
+```
 
 The first implementation supports one interleaved 8-bit SOF0 scan with one or
 three components and no restart interval. Progressive JPEGs, restart markers,
@@ -171,7 +182,7 @@ five public-domain landscape JPEG fixtures. Their source pages are listed in
 `assets/benchmark-jpegs/clipart-sources.json` and
 `assets/benchmark-jpegs/landscape-sources.json`.
 
-Run the native-browser-vs-WASM-vs-WASM+GPU-vs-GPU JPEG benchmark:
+Run the native-browser-vs-WASM JPEG benchmark:
 
 ```powershell
 $env:BROWSER='edge'
@@ -202,39 +213,16 @@ default browser resolves to Edge, but that launch mode is blocked by policy with
 `BROWSER='edge'` still works.
 
 The benchmark fetches all JPEG files before timing. The native path measures
-`createImageBitmap()` decode time. The WASM path measures `WasmJpegDecoder.decode()`,
-which includes shared JS JPEG parsing/Huffman decode plus WASM IDCT and YCbCr to
-RGBA. The WASM+GPU path uses WASM to pack GPU coefficient atlases and WebGL for
-IDCT/color conversion. The GPU path measures `GpuJpegDecoder.decode()` plus
-`gl.finish()`, so it includes CPU JPEG parsing/Huffman decode and GPU IDCT.
-
-To include the experimental WebGPU-resident decoder, enable the WebGPU browser
-flag and keep the dataset to known SOF0 fixtures while the subset is still being
-expanded:
-
-```powershell
-$env:BROWSER_ENABLE_WEBGPU='1'
-$env:WEBGPU_JPEG='1'
-node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm/jpeg-idct.wasm
-```
+`createImageBitmap()` decode time. The WASM path measures
+`WasmJpegDecoder.decode()`, which includes shared JS JPEG parsing/Huffman decode
+plus WASM IDCT and YCbCr to RGBA.
 
 Latest 100-image 64x64 run after the quality-focused upsampling update:
 
 - Native total: 306.2 ms, median: 1.3 ms, trimmed avg: 1.62 ms
 - WASM total: 241.9 ms, median: 2.0 ms, trimmed avg: 2.14 ms
-- WASM+GPU total: 370.4 ms, median: 3.3 ms, trimmed avg: 3.41 ms
-- GPU total: 518.0 ms, median: 3.9 ms, trimmed avg: 4.57 ms
 - Speedup values below 1 mean the tested path is slower than the reference.
-  WASM+GPU was 1.34x faster than the GPU path by trimmed average in this run,
-  while the native browser decoder remained fastest by trimmed average.
-
-Run a WebP benchmark through the browser page:
-
-```text
-http://127.0.0.1:8000/benchmarks.html?format=webp&manifest=/assets/benchmark-webps/manifest.json&limit=12&warmup=1
-```
-
-The WebP benchmark compares native browser decode against `WasmWebpDecoder`.
+  The native browser decoder remained fastest by trimmed average in this run.
 
 Run the demo through a local server so `fetch()` can read image and WASM files:
 
