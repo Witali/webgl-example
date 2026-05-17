@@ -1,15 +1,16 @@
-# WebGL GPU JPEG Decoder Demo
+# WebGL Image Decode Demo
 
 This project renders a textured rotating cube and includes a small standalone
-GPU-assisted JPEG decoder in `gpu-jpeg.js`.
+GPU-assisted JPEG decoder in `gpu-jpeg.js` plus a WASM/libwebp WebP decoder
+wrapper in `webp-decoder.js`.
 
 Open `index.html` through a local server to choose between:
 
 - `cube.html` for the textured rotating cube
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
-- `benchmarks.html` for native browser, WASM, WASM+GPU, and GPU JPEG decode
-  timings
+- `benchmarks.html` for native browser, JPEG WASM/WASM+GPU/GPU, and WebP WASM
+  decode timings
 
 ## `GpuJpegDecoder`
 
@@ -33,13 +34,25 @@ The returned object has:
 - `texture`
 - `dispose()`
 
+## `WasmWebpDecoder`
+
+`webp-decoder.js` wraps `@jsquash/webp`, which is a libwebp WebAssembly decoder.
+It returns RGBA pixels so the visual comparison page can compare browser WebP
+decode against an independent WASM decode path.
+
+```js
+const decoder = await WasmWebpDecoder.create();
+const result = await decoder.decodeUrl("assets/benchmark-webps/bench-000.webp");
+```
+
 ## Limits
 
 Baseline and progressive Huffman JPEGs are supported. Arithmetic-coded JPEG,
-CMYK/YCCK JPEG, and 12-bit precision JPEG are not supported. WebGL fragment
-shaders are a poor fit for the variable-length Huffman bitstream stage, so the
-library keeps that part on CPU and offloads the regular per-pixel reconstruction
-work to GPU.
+CMYK/YCCK JPEG, and 12-bit precision JPEG are not supported. WebP is supported
+through libwebp WASM rather than the JPEG GPU pipeline. WebGL fragment shaders
+are a poor fit for variable-length entropy bitstreams, so the project keeps
+those stages on CPU/WASM and offloads regular per-pixel reconstruction work
+where practical.
 
 ## IDCT Optimization Notes
 
@@ -101,9 +114,9 @@ Then open:
 http://127.0.0.1:8000/tests/visual-jpeg-compare.html
 ```
 
-The page shows the browser-decoded JPEG, the library-decoded JPEG, and an
+The page shows the browser-decoded image, the library-decoded image, and an
 amplified diff map. Use the decoder selector to switch between `GPU`, `WASM`,
-and `WASM+GPU`.
+`WASM+GPU`, and `WASM WebP`. The upload input accepts JPEG and WebP files.
 
 Latest visual comparison results:
 
@@ -113,6 +126,8 @@ Latest visual comparison results:
   diff 0.035
 - 1100x734 texture, WASM: 54,632 mismatched pixels out of 807,400, max diff 3,
   mean byte diff 0.028
+- 32x32 WebP fixture, WASM WebP: 0 mismatched pixels out of 1024, max diff 0,
+  mean byte diff 0.000
 
 ## Decode Benchmark
 
@@ -128,7 +143,7 @@ Build the WASM IDCT module from WAT:
 npm run build:wasm
 ```
 
-Run the native-browser-vs-WASM-vs-WASM+GPU-vs-GPU benchmark:
+Run the native-browser-vs-WASM-vs-WASM+GPU-vs-GPU JPEG benchmark:
 
 ```powershell
 $env:BROWSER='edge'
@@ -175,7 +190,15 @@ Latest 100-image 64x64 run after the quality-focused upsampling update:
   WASM+GPU was 1.34x faster than the GPU path by trimmed average in this run,
   while the native browser decoder remained fastest by trimmed average.
 
-Run the demo through a local server so `fetch()` can read the JPEG:
+Run a WebP benchmark through the browser page:
+
+```text
+http://127.0.0.1:8000/benchmarks.html?format=webp&manifest=/assets/benchmark-webps/manifest.json&limit=12&warmup=1
+```
+
+The WebP benchmark compares native browser decode against `WasmWebpDecoder`.
+
+Run the demo through a local server so `fetch()` can read image and WASM files:
 
 ```powershell
 python -m http.server 8000

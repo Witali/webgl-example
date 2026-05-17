@@ -33,6 +33,7 @@ if (params.get("diffScale") && diffScaleInput) {
 }
 
 let wasmDecoderPromise = null;
+let webpDecoderPromise = null;
 let uploadedImageUrl = null;
 let lastDiffSource = null;
 
@@ -61,8 +62,8 @@ if (uploadButton && fileInput) {
       return;
     }
 
-    if (!isJpegFile(file)) {
-      setStatus("Please choose a JPEG file.");
+    if (!isSupportedImageFile(file)) {
+      setStatus("Please choose a JPEG or WebP file.");
       fileInput.value = "";
       return;
     }
@@ -70,6 +71,11 @@ if (uploadButton && fileInput) {
     releaseUploadedImage();
     uploadedImageUrl = URL.createObjectURL(file);
     imageInput.value = uploadedImageUrl;
+
+    if (isWebpFile(file)) {
+      decoderSelect.value = "webp-wasm";
+    }
+
     runVisualCompare();
   });
 
@@ -124,13 +130,28 @@ async function runVisualCompare() {
     drawPixels(libraryCanvas, libraryDecoded);
     redrawDiffImage();
     updateMetrics(browserDecoded.width, browserDecoded.height, comparison);
-    setStatus(`Loaded with ${decoder.toUpperCase()} decoder`);
+    setStatus(`Loaded with ${formatDecoderName(decoder)} decoder`);
   } catch (error) {
     setStatus(error && error.stack ? error.stack : String(error));
   }
 }
 
 async function decodeWithLibrary(url, decoder) {
+  if (decoder === "webp-wasm") {
+    if (!webpDecoderPromise) {
+      webpDecoderPromise = WasmWebpDecoder.create();
+    }
+
+    const webpDecoder = await webpDecoderPromise;
+    const decoded = await webpDecoder.decodeUrl(url);
+
+    return {
+      width: decoded.width,
+      height: decoded.height,
+      pixels: new Uint8ClampedArray(decoded.pixels),
+    };
+  }
+
   if (decoder === "wasm") {
     if (!wasmDecoderPromise) {
       wasmDecoderPromise = WasmJpegDecoder.create("/wasm/jpeg-idct.wasm");
@@ -405,12 +426,37 @@ function updateDiffScaleLabel() {
   }
 }
 
+function isSupportedImageFile(file) {
+  return isJpegFile(file) || isWebpFile(file);
+}
+
 function isJpegFile(file) {
   if (file.type) {
     return file.type === "image/jpeg" || file.type === "image/pjpeg";
   }
 
   return /\.jpe?g$/i.test(file.name);
+}
+
+function isWebpFile(file) {
+  if (file.type) {
+    return file.type === "image/webp";
+  }
+
+  return /\.webp$/i.test(file.name);
+}
+
+function formatDecoderName(decoder) {
+  switch (decoder) {
+    case "wasm":
+      return "WASM";
+    case "wasm-gpu":
+      return "WASM-GPU";
+    case "webp-wasm":
+      return "WASM WebP";
+    default:
+      return "GPU";
+  }
 }
 
 function releaseUploadedImage() {

@@ -5,5 +5,8 @@
   },
   "devDependencies": {
     "wabt": "^1.0.39"
+  },
+  "dependencies": {
+    "@jsquash/webp": "^1.5.0"
   }
 }

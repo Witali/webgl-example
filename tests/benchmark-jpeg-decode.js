@@ -3,6 +3,7 @@
 const params = new URLSearchParams(window.location.search);
 const manifestUrl = params.get("manifest") || "/assets/benchmark-jpegs/manifest.json";
 const wasmUrl = params.get("wasm") || "/wasm/jpeg-idct.wasm";
+const format = (params.get("format") || "jpeg").toLowerCase();
 const limit = Number(params.get("limit") || 100);
 const warmupCount = Number(params.get("warmup") || 3);
 const readback = params.get("readback") === "1";
@@ -15,6 +16,15 @@ runBenchmark().catch((error) => {
 });
 
 async function runBenchmark() {
+  if (format === "webp") {
+    await runWebpBenchmark();
+    return;
+  }
+
+  if (format !== "jpeg") {
+    throw new Error(`Unsupported benchmark format: ${format}`);
+  }
+
   writeStatus("loading manifest");
 
   const manifest = await fetchJson(manifestUrl);
@@ -74,6 +84,7 @@ async function runBenchmark() {
   writeResult({
     ok: true,
     config: {
+      format,
       manifest: manifestUrl,
       wasm: wasmUrl,
       requestedLimit: limit,
@@ -122,6 +133,81 @@ async function runBenchmark() {
   });
 }
 
+async function runWebpBenchmark() {
+  writeStatus("loading WebP manifest");
+
+  const manifest = await fetchJson(manifestUrl);
+  const urls = manifest.slice(0, limit);
+
+  if (urls.length === 0) {
+    throw new Error("Benchmark manifest is empty.");
+  }
+
+  writeStatus(`fetching ${urls.length} WebP files`);
+
+  const loadedImages = await fetchImages(urls);
+  const webpDecoder = await WasmWebpDecoder.create();
+  const nativeWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
+  const wasmWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
+
+  writeStatus(`warming native WebP decoder (${nativeWarmupImages.length})`);
+  await runNativeDecode(nativeWarmupImages, {
+    collectTimings: false,
+    mimeType: "image/webp",
+  });
+
+  writeStatus(`warming WASM WebP decoder (${wasmWarmupImages.length})`);
+  await runAsyncPixelDecode(webpDecoder, wasmWarmupImages, { collectTimings: false });
+
+  writeStatus(`benchmarking native WebP decoder (${loadedImages.length})`);
+  const nativeDecode = await runNativeDecode(loadedImages, {
+    collectTimings: true,
+    mimeType: "image/webp",
+  });
+
+  writeStatus(`benchmarking WASM WebP decoder (${loadedImages.length})`);
+  const wasmWebpDecode = await runAsyncPixelDecode(webpDecoder, loadedImages, {
+    collectTimings: true,
+  });
+
+  const totalBytes = loadedImages.reduce((sum, image) => sum + image.bytes.byteLength, 0);
+  const totalPixels = loadedImages.reduce((sum, image) => {
+    return sum + (image.width || 0) * (image.height || 0);
+  }, 0);
+
+  writeResult({
+    ok: true,
+    config: {
+      format,
+      manifest: manifestUrl,
+      requestedLimit: limit,
+      imageCount: loadedImages.length,
+      warmupCount,
+    },
+    dataset: {
+      totalBytes,
+      totalPixels,
+      megapixels: totalPixels / 1000000,
+      firstImage: {
+        url: loadedImages[0].url,
+        width: loadedImages[0].width,
+        height: loadedImages[0].height,
+        bytes: loadedImages[0].bytes.byteLength,
+      },
+    },
+    nativeDecode,
+    wasmWebpDecode,
+    speedup: {
+      wasmWebpTotalVsNative: nativeDecode.totalMs / wasmWebpDecode.totalMs,
+      wasmWebpMedianVsNative: nativeDecode.medianMs / wasmWebpDecode.medianMs,
+      wasmWebpTrimmedAverageVsNative: nativeDecode.trimmedAvgMs / wasmWebpDecode.trimmedAvgMs,
+    },
+    environment: {
+      userAgent: navigator.userAgent,
+    },
+  });
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
 
@@ -154,10 +240,11 @@ async function fetchImages(urls) {
 async function runNativeDecode(images, options) {
   const timings = [];
   const startedAt = performance.now();
+  const mimeType = options.mimeType || "image/jpeg";
 
   for (const image of images) {
     const started = performance.now();
-    const bitmap = await createImageBitmap(new Blob([image.bytes], { type: "image/jpeg" }));
+    const bitmap = await createImageBitmap(new Blob([image.bytes], { type: mimeType }));
     const elapsed = performance.now() - started;
 
     image.width = image.width || bitmap.width;
@@ -176,6 +263,36 @@ async function runNativeDecode(images, options) {
   const totalMs = performance.now() - startedAt;
 
   return summarizeTimings(timings, totalMs);
+}
+
+async function runAsyncPixelDecode(decoder, images, options) {
+  const timings = [];
+  const startedAt = performance.now();
+  let checksum = 0;
+
+  for (const image of images) {
+    const buffer = image.bytes.slice(0);
+    const started = performance.now();
+    const decoded = await decoder.decode(buffer);
+    const elapsed = performance.now() - started;
+
+    image.width = image.width || decoded.width;
+    image.height = image.height || decoded.height;
+    checksum = (checksum + decoded.pixels[0] + decoded.pixels[decoded.pixels.length - 4]) & 65535;
+
+    if (options.collectTimings) {
+      timings.push(elapsed);
+    }
+  }
+
+  if (!options.collectTimings) {
+    return null;
+  }
+
+  const summary = summarizeTimings(timings, performance.now() - startedAt);
+
+  summary.checksum = checksum;
+  return summary;
 }
 
 function runWasmDecode(decoder, images, options) {
