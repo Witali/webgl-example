@@ -87,6 +87,10 @@ input {
   padding: 0 10px;
 }
 
+#image-url {
+  width: min(440px, 62vw);
+}
+
 input[type="range"] {
   width: 170px;
   padding: 0;
@@ -324,6 +328,10 @@ details pre {
   }
 
   input {
+    width: 100%;
+  }
+
+  #image-url {
     width: 100%;
   }
 

@@ -7,6 +7,7 @@ const format = (params.get("format") || "jpeg").toLowerCase();
 const limit = Number(params.get("limit") || 100);
 const warmupCount = Number(params.get("warmup") || 3);
 const readback = params.get("readback") === "1";
+const includeWebGpu = params.get("webgpu") === "1";
 
 runBenchmark().catch((error) => {
   writeResult({
@@ -47,9 +48,11 @@ async function runBenchmark() {
   const decoder = new GpuJpegDecoder(gl);
   const wasmDecoder = await WasmJpegDecoder.create(wasmUrl);
   const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
+  const webGpuDecoder = includeWebGpu ? await WebGpuJpegDecoder.create() : null;
   const nativeWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
   const wasmWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
   const wasmGpuWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
+  const webGpuWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
   const gpuWarmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
 
   writeStatus(`warming native decoder (${nativeWarmupImages.length})`);
@@ -60,6 +63,11 @@ async function runBenchmark() {
 
   writeStatus(`warming WASM+GPU decoder (${wasmGpuWarmupImages.length})`);
   runGpuDecode(gl, wasmGpuDecoder, wasmGpuWarmupImages, { collectTimings: false, readback });
+
+  if (webGpuDecoder) {
+    writeStatus(`warming WebGPU resident decoder (${webGpuWarmupImages.length})`);
+    await runWebGpuDecode(webGpuDecoder, webGpuWarmupImages, { collectTimings: false, readback });
+  }
 
   writeStatus(`warming GPU decoder (${gpuWarmupImages.length})`);
   runGpuDecode(gl, decoder, gpuWarmupImages, { collectTimings: false, readback });
@@ -72,6 +80,13 @@ async function runBenchmark() {
 
   writeStatus(`benchmarking WASM+GPU decoder (${loadedImages.length})`);
   const wasmGpuDecode = runGpuDecode(gl, wasmGpuDecoder, loadedImages, { collectTimings: true, readback });
+
+  let webGpuDecode = null;
+
+  if (webGpuDecoder) {
+    writeStatus(`benchmarking WebGPU resident decoder (${loadedImages.length})`);
+    webGpuDecode = await runWebGpuDecode(webGpuDecoder, loadedImages, { collectTimings: true, readback });
+  }
 
   writeStatus(`benchmarking GPU decoder (${loadedImages.length})`);
   const gpuDecode = runGpuDecode(gl, decoder, loadedImages, { collectTimings: true, readback });
@@ -91,6 +106,7 @@ async function runBenchmark() {
       imageCount: loadedImages.length,
       warmupCount,
       readback,
+      includeWebGpu,
     },
     dataset: {
       totalBytes,
@@ -106,6 +122,7 @@ async function runBenchmark() {
     nativeDecode,
     wasmDecode,
     wasmGpuDecode,
+    webGpuDecode,
     gpuDecode,
     speedup: {
       wasmTotalVsNative: nativeDecode.totalMs / wasmDecode.totalMs,
@@ -123,6 +140,11 @@ async function runBenchmark() {
       wasmGpuTrimmedAverageVsWasm: wasmDecode.trimmedAvgMs / wasmGpuDecode.trimmedAvgMs,
       wasmGpuTotalVsGpu: gpuDecode.totalMs / wasmGpuDecode.totalMs,
       wasmGpuTrimmedAverageVsGpu: gpuDecode.trimmedAvgMs / wasmGpuDecode.trimmedAvgMs,
+      webGpuTotalVsNative: webGpuDecode ? nativeDecode.totalMs / webGpuDecode.totalMs : null,
+      webGpuMedianVsNative: webGpuDecode ? nativeDecode.medianMs / webGpuDecode.medianMs : null,
+      webGpuTrimmedAverageVsNative: webGpuDecode ? nativeDecode.trimmedAvgMs / webGpuDecode.trimmedAvgMs : null,
+      webGpuTotalVsGpu: webGpuDecode ? gpuDecode.totalMs / webGpuDecode.totalMs : null,
+      webGpuTrimmedAverageVsGpu: webGpuDecode ? gpuDecode.trimmedAvgMs / webGpuDecode.trimmedAvgMs : null,
     },
     environment: {
       renderer: gl.getParameter(gl.RENDERER),
@@ -365,6 +387,42 @@ function runGpuDecode(gl, decoder, images, options) {
   return summary;
 }
 
+async function runWebGpuDecode(decoder, images, options) {
+  const timings = [];
+  const startedAt = performance.now();
+  let checksum = 0;
+
+  for (const image of images) {
+    const buffer = image.bytes.slice(0);
+    const started = performance.now();
+    const decoded = await decoder.decode(buffer);
+
+    if (options.readback) {
+      await decoded.readPixels();
+    }
+
+    const elapsed = performance.now() - started;
+
+    image.width = image.width || decoded.width;
+    image.height = image.height || decoded.height;
+    checksum = (checksum + decoded.width + decoded.height) & 65535;
+    decoded.dispose();
+
+    if (options.collectTimings) {
+      timings.push(elapsed);
+    }
+  }
+
+  if (!options.collectTimings) {
+    return null;
+  }
+
+  const summary = summarizeTimings(timings, performance.now() - startedAt);
+
+  summary.checksum = checksum;
+  return summary;
+}
+
 function readTexture(gl, texture, width, height) {
   const framebuffer = gl.createFramebuffer();
   const pixels = new Uint8Array(width * height * 4);
@@ -521,6 +579,7 @@ function getTimingRows(result) {
     ["nativeDecode", "Native browser"],
     ["wasmDecode", "WASM JPEG"],
     ["wasmGpuDecode", "WASM+GPU JPEG"],
+    ["webGpuDecode", "WebGPU resident JPEG"],
     ["gpuDecode", "GPU JPEG"],
     ["wasmWebpDecode", "WASM WebP"],
   ];
@@ -562,6 +621,18 @@ function getSpeedupRows(result) {
       trimmed: speedup.gpuTrimmedAverageVsNative,
     },
     {
+      label: "WebGPU resident JPEG vs Native browser",
+      total: speedup.webGpuTotalVsNative,
+      median: speedup.webGpuMedianVsNative,
+      trimmed: speedup.webGpuTrimmedAverageVsNative,
+    },
+    {
+      label: "WebGPU resident JPEG vs GPU JPEG",
+      total: speedup.webGpuTotalVsGpu,
+      median: null,
+      trimmed: speedup.webGpuTrimmedAverageVsGpu,
+    },
+    {
       label: "GPU JPEG vs WASM JPEG",
       total: speedup.gpuTotalVsWasm,
       median: null,
@@ -579,7 +650,11 @@ function getSpeedupRows(result) {
       median: null,
       trimmed: speedup.wasmGpuTrimmedAverageVsGpu,
     },
-  ];
+  ].filter((row) => {
+    return Number.isFinite(row.total) ||
+      Number.isFinite(row.median) ||
+      Number.isFinite(row.trimmed);
+  });
 }
 
 function createSection(title, child) {

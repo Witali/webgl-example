@@ -51,14 +51,26 @@ const decoder = await WasmWebpDecoder.create();
 const result = await decoder.decodeUrl("assets/benchmark-webps/bench-000.webp");
 ```
 
+## `WebGpuJpegDecoder`
+
+`webgpu-jpeg.js` is an experimental GPU-resident baseline JPEG decoder. It
+uploads the JPEG byte stream to a WebGPU storage buffer and runs Huffman entropy
+decode, dequantization, IDCT, YCbCr upsampling, and RGBA output in GPU compute
+passes. JavaScript still parses JPEG headers and tables so the browser can
+allocate the required GPU buffers.
+
+The first implementation supports one interleaved 8-bit SOF0 scan with one or
+three components and no restart interval. Progressive JPEGs, restart markers,
+CMYK/YCCK, arithmetic coding, and multi-scan baseline JPEGs are still handled by
+the existing CPU/WASM/GPU-assisted paths instead.
+
 ## Limits
 
 Baseline and progressive Huffman JPEGs are supported. Arithmetic-coded JPEG,
 CMYK/YCCK JPEG, and 12-bit precision JPEG are not supported. WebP is supported
-through libwebp WASM rather than the JPEG GPU pipeline. WebGL fragment shaders
-are a poor fit for variable-length entropy bitstreams, so the project keeps
-those stages on CPU/WASM and offloads regular per-pixel reconstruction work
-where practical.
+through libwebp WASM rather than the JPEG GPU pipeline. The WebGPU-resident
+decoder proves that entropy and reconstruction can run from GPU buffers, but it
+is still a narrower experimental baseline subset.
 
 ## IDCT Optimization Notes
 
@@ -105,6 +117,8 @@ WASM and GPU paths are now very close. On the 64x64 fixture the visual compare
 reports a maximum channel difference of 3 and mean byte difference near 0.034.
 On the original progressive 1100x734 stone texture, GPU and WASM+GPU report a
 maximum channel difference of 8 and mean byte difference near 0.028.
+The WebGPU-resident baseline path currently reports a maximum channel difference
+of 2 and mean byte difference near 0.030 on `bench-000.jpg`.
 
 ## Visual Compare
 
@@ -121,8 +135,9 @@ http://127.0.0.1:8000/tests/visual-jpeg-compare.html
 ```
 
 The page shows the browser-decoded image, the library-decoded image, and an
-amplified diff map. Use the decoder selector to switch between `GPU`, `WASM`,
-`WASM+GPU`, and `WASM WebP`. The upload input accepts JPEG and WebP files.
+amplified diff map. Use the decoder selector to switch between `GPU`, `WebGPU
+resident`, `WASM`, `WASM+GPU`, and `WASM WebP`. The upload input accepts JPEG
+and WebP files.
 
 Latest visual comparison results:
 
@@ -132,6 +147,8 @@ Latest visual comparison results:
   diff 0.035
 - 1100x734 texture, WASM: 54,632 mismatched pixels out of 807,400, max diff 3,
   mean byte diff 0.028
+- 64x64 fixture `bench-000.jpg`, WebGPU resident: 317 mismatched pixels out of
+  4096, max diff 2, mean byte diff 0.030
 - 32x32 WebP fixture, WASM WebP: 0 mismatched pixels out of 1024, max diff 0,
   mean byte diff 0.000
 
@@ -190,6 +207,16 @@ which includes shared JS JPEG parsing/Huffman decode plus WASM IDCT and YCbCr to
 RGBA. The WASM+GPU path uses WASM to pack GPU coefficient atlases and WebGL for
 IDCT/color conversion. The GPU path measures `GpuJpegDecoder.decode()` plus
 `gl.finish()`, so it includes CPU JPEG parsing/Huffman decode and GPU IDCT.
+
+To include the experimental WebGPU-resident decoder, enable the WebGPU browser
+flag and keep the dataset to known SOF0 fixtures while the subset is still being
+expanded:
+
+```powershell
+$env:BROWSER_ENABLE_WEBGPU='1'
+$env:WEBGPU_JPEG='1'
+node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm/jpeg-idct.wasm
+```
 
 Latest 100-image 64x64 run after the quality-focused upsampling update:
 

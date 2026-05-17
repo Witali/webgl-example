@@ -9,6 +9,7 @@ const limit = process.argv[3] || "100";
 const warmup = process.argv[4] || "3";
 const wasm = process.argv[5] || "/wasm/jpeg-idct.wasm";
 const readback = process.env.GPU_READBACK === "1" ? "1" : "0";
+const webgpu = process.env.WEBGPU_JPEG === "1" ? "1" : "0";
 
 runBrowserPage({
   projectRoot,
@@ -19,6 +20,7 @@ runBrowserPage({
     warmup,
     wasm,
     readback,
+    webgpu,
   },
   resultExpression: "window.__benchmarkResult || null",
   snapshotExpression: "({ href: location.href, readyState: document.readyState, body: document.body ? document.body.textContent : null, hasDecoder: typeof GpuJpegDecoder, hasResult: Boolean(window.__benchmarkResult) })",

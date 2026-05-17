@@ -18,11 +18,17 @@ const metricMax = document.getElementById("metric-max");
 const metricMean = document.getElementById("metric-mean");
 
 const DEFAULT_DIFF_SCALE = 16;
+const DEFAULT_IMAGE_URL = "/assets/stone-texture-small.jpg";
+const STATIC_ASSET_JPEGS = [
+  "/assets/stone-texture-small.jpg",
+  "/assets/stone-texture-tiny.jpg",
+  "/assets/stone-texture.jpg",
+  "/assets/stone-texture-wic.jpg",
+];
+const ASSET_JPEG_MANIFESTS = [
+  "/assets/benchmark-jpegs/manifest.json",
+];
 const params = new URLSearchParams(window.location.search);
-
-if (params.get("image")) {
-  imageInput.value = params.get("image");
-}
 
 if (params.get("decoder")) {
   decoderSelect.value = params.get("decoder");
@@ -33,9 +39,11 @@ if (params.get("diffScale") && diffScaleInput) {
 }
 
 let wasmDecoderPromise = null;
+let webGpuDecoderPromise = null;
 let webpDecoderPromise = null;
 let uploadedImageUrl = null;
 let lastDiffSource = null;
+let assetImageUrls = STATIC_ASSET_JPEGS.slice();
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -70,6 +78,7 @@ if (uploadButton && fileInput) {
 
     releaseUploadedImage();
     uploadedImageUrl = URL.createObjectURL(file);
+    addImageOption(uploadedImageUrl, file.name || "Uploaded image");
     imageInput.value = uploadedImageUrl;
 
     if (isWebpFile(file)) {
@@ -79,14 +88,14 @@ if (uploadButton && fileInput) {
     runVisualCompare();
   });
 
-  imageInput.addEventListener("input", () => {
+  imageInput.addEventListener("change", () => {
     if (uploadedImageUrl && imageInput.value !== uploadedImageUrl) {
       releaseUploadedImage();
     }
   });
 }
 
-runVisualCompare();
+initializeImageSelect().then(runVisualCompare);
 
 async function runVisualCompare() {
   const imageUrl = imageInput.value.trim();
@@ -170,6 +179,24 @@ async function decodeWithLibrary(url, decoder) {
       width: decoded.width,
       height: decoded.height,
       pixels: new Uint8ClampedArray(decoded.pixels),
+    };
+  }
+
+  if (decoder === "webgpu") {
+    if (!webGpuDecoderPromise) {
+      webGpuDecoderPromise = WebGpuJpegDecoder.create();
+    }
+
+    const webGpuDecoder = await webGpuDecoderPromise;
+    const decoded = await webGpuDecoder.decodeUrl(url);
+    const pixels = await decoded.readPixels();
+
+    decoded.dispose();
+
+    return {
+      width: decoded.width,
+      height: decoded.height,
+      pixels: new Uint8ClampedArray(pixels),
     };
   }
 
@@ -426,6 +453,68 @@ function updateDiffScaleLabel() {
   }
 }
 
+async function initializeImageSelect() {
+  const requestedImage = params.get("image") || DEFAULT_IMAGE_URL;
+
+  try {
+    assetImageUrls = await loadAssetJpegUrls();
+  } catch (error) {
+    setStatus(`Could not load asset image list: ${error && error.message ? error.message : error}`);
+    assetImageUrls = STATIC_ASSET_JPEGS.slice();
+  }
+
+  imageInput.replaceChildren();
+  assetImageUrls.forEach((url) => {
+    addImageOption(url, formatAssetImageLabel(url));
+  });
+
+  if (!assetImageUrls.includes(requestedImage)) {
+    addImageOption(requestedImage, formatAssetImageLabel(requestedImage));
+  }
+
+  imageInput.value = requestedImage;
+}
+
+async function loadAssetJpegUrls() {
+  const urls = new Set(STATIC_ASSET_JPEGS);
+
+  for (const manifestUrl of ASSET_JPEG_MANIFESTS) {
+    const response = await fetch(manifestUrl);
+
+    if (!response.ok) {
+      throw new Error(`${manifestUrl}: ${response.status}`);
+    }
+
+    const manifest = await response.json();
+
+    manifest
+      .filter((url) => typeof url === "string" && isJpegUrl(url))
+      .forEach((url) => urls.add(url));
+  }
+
+  return Array.from(urls);
+}
+
+function addImageOption(url, label) {
+  const option = document.createElement("option");
+
+  option.value = url;
+  option.textContent = label;
+  imageInput.append(option);
+}
+
+function formatAssetImageLabel(url) {
+  if (url.startsWith("blob:")) {
+    return "Uploaded image";
+  }
+
+  return url.replace(/^\/?assets\//, "");
+}
+
+function isJpegUrl(url) {
+  return /\.jpe?g(?:[?#].*)?$/i.test(url);
+}
+
 function isSupportedImageFile(file) {
   return isJpegFile(file) || isWebpFile(file);
 }
@@ -450,6 +539,8 @@ function formatDecoderName(decoder) {
   switch (decoder) {
     case "wasm":
       return "WASM";
+    case "webgpu":
+      return "WebGPU resident";
     case "wasm-gpu":
       return "WASM-GPU";
     case "webp-wasm":
@@ -461,6 +552,14 @@ function formatDecoderName(decoder) {
 
 function releaseUploadedImage() {
   if (uploadedImageUrl) {
+    const uploadedOption = Array.from(imageInput.options).find((option) => {
+      return option.value === uploadedImageUrl;
+    });
+
+    if (uploadedOption) {
+      uploadedOption.remove();
+    }
+
     URL.revokeObjectURL(uploadedImageUrl);
     uploadedImageUrl = null;
   }

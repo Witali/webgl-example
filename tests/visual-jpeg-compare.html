@@ -13,12 +13,15 @@
         <form id="controls">
           <label>
             Image
-            <input id="image-url" name="image" type="text" value="/assets/stone-texture-small.jpg">
+            <select id="image-url" name="image">
+              <option value="/assets/stone-texture-small.jpg">stone-texture-small.jpg</option>
+            </select>
           </label>
           <label>
             Decoder
             <select id="decoder" name="decoder">
               <option value="gpu">GPU</option>
+              <option value="webgpu">WebGPU resident</option>
               <option value="wasm">WASM</option>
               <option value="wasm-gpu">WASM+GPU</option>
               <option value="webp-wasm">WASM WebP</option>
@@ -72,6 +75,7 @@
     </main>
 
     <script src="../gpu-jpeg.js"></script>
+    <script src="../webgpu-jpeg.js"></script>
     <script src="../wasm-jpeg.js"></script>
     <script src="../wasm-gpu-jpeg.js"></script>
     <script src="../webp-decoder.js"></script>

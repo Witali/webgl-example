@@ -249,6 +249,10 @@ function createBrowserArgs({ debugPort, userDataDir, url }) {
     browserArgs.splice(5, 0, "--disable-gpu-sandbox");
   }
 
+  if (process.env.BROWSER_ENABLE_WEBGPU === "1") {
+    browserArgs.splice(5, 0, "--enable-unsafe-webgpu");
+  }
+
   return browserArgs;
 }
 
