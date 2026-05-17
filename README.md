@@ -13,10 +13,11 @@ Open `index.html` through a local server to choose between:
 
 ## `GpuJpegDecoder`
 
-The decoder supports 8-bit baseline JPEG images with one grayscale component or
-three YCbCr components. It performs JPEG marker parsing and Huffman entropy
-decoding on the CPU, then uses WebGL to run dequantized DCT blocks through IDCT
-and YCbCr-to-RGB conversion into a WebGL texture.
+The decoder supports 8-bit sequential baseline and progressive JPEG images with
+one grayscale component or three YCbCr components. It performs JPEG marker
+parsing and Huffman entropy decoding on the CPU, then uses WebGL to run
+dequantized DCT blocks through IDCT and YCbCr-to-RGB conversion into a WebGL
+texture.
 
 ```js
 const decoder = new GpuJpegDecoder(gl);
@@ -34,9 +35,11 @@ The returned object has:
 
 ## Limits
 
-Progressive JPEG is intentionally rejected. WebGL fragment shaders are a poor
-fit for the variable-length Huffman bitstream stage, so the library keeps that
-part on CPU and offloads the regular per-pixel reconstruction work to GPU.
+Baseline and progressive Huffman JPEGs are supported. Arithmetic-coded JPEG,
+CMYK/YCCK JPEG, and 12-bit precision JPEG are not supported. WebGL fragment
+shaders are a poor fit for the variable-length Huffman bitstream stage, so the
+library keeps that part on CPU and offloads the regular per-pixel reconstruction
+work to GPU.
 
 ## IDCT Optimization Notes
 
@@ -81,6 +84,8 @@ node tools\run-jpeg-compare.js /assets/stone-texture-small.jpg
 The current decoder is not bit-exact against the browser decoder, but the tuned
 WASM and GPU paths are now very close. On the 64x64 fixture the visual compare
 reports a maximum channel difference of 3 and mean byte difference near 0.034.
+On the original progressive 1100x734 stone texture, GPU and WASM+GPU report a
+maximum channel difference of 8 and mean byte difference near 0.028.
 
 ## Visual Compare
 

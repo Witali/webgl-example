@@ -176,7 +176,7 @@
       const gl = this.gl;
 
       if (jpeg.components.length !== 1 && jpeg.components.length !== 3) {
-        throw new Error("GpuJpegDecoder supports grayscale and YCbCr baseline JPEG images.");
+        throw new Error("GpuJpegDecoder supports grayscale and YCbCr JPEG images.");
       }
 
       this.ensureProgram();
@@ -423,6 +423,8 @@
       this.restartInterval = 0;
       this.maxHorizontalSampling = 1;
       this.maxVerticalSampling = 1;
+      this.progressive = false;
+      this.blocksAllocated = false;
       this.blockScratch = new Int32Array(64);
     }
 
@@ -456,10 +458,11 @@
 
         switch (marker) {
           case 0xc0:
-            this.parseStartOfFrame(segmentEnd);
+            this.parseStartOfFrame(segmentEnd, false);
             break;
           case 0xc2:
-            throw new Error("Progressive JPEG is not supported by GpuJpegDecoder.");
+            this.parseStartOfFrame(segmentEnd, true);
+            break;
           case 0xc4:
             this.parseDefineHuffmanTables(segmentEnd);
             break;
@@ -483,6 +486,12 @@
         throw new Error("Invalid JPEG: image metadata was not found.");
       }
 
+      if (!this.blocksAllocated) {
+        throw new Error("Invalid JPEG: image entropy data was not found.");
+      }
+
+      this.dequantizeBlocks();
+
       return {
         width: this.width,
         height: this.height,
@@ -492,15 +501,16 @@
       };
     }
 
-    parseStartOfFrame(segmentEnd) {
+    parseStartOfFrame(segmentEnd, progressive) {
       const precision = this.readUint8();
 
       if (precision !== 8) {
-        throw new Error("Only 8-bit baseline JPEG images are supported.");
+        throw new Error("Only 8-bit JPEG images are supported.");
       }
 
       this.height = this.readUint16();
       this.width = this.readUint16();
+      this.progressive = progressive;
 
       const componentCount = this.readUint8();
 
@@ -526,6 +536,7 @@
           previousDc: 0,
           blockCountX: 0,
           blockCountY: 0,
+          coefficients: null,
           blocks: null,
         };
 
@@ -541,6 +552,7 @@
         this.componentById.set(component.id, component);
       }
 
+      this.blocksAllocated = false;
       this.offset = segmentEnd;
     }
 
@@ -594,19 +606,17 @@
         const id = this.readUint8();
         const tableInfo = this.readUint8();
         const component = this.componentById.get(id);
+        const scanComponent = {
+          component,
+          dcTable: this.huffmanTables[0][tableInfo >> 4],
+          acTable: this.huffmanTables[1][tableInfo & 15],
+        };
 
         if (!component) {
           throw new Error(`Invalid JPEG: unknown scan component ${id}.`);
         }
 
-        component.dcTable = this.huffmanTables[0][tableInfo >> 4];
-        component.acTable = this.huffmanTables[1][tableInfo & 15];
-
-        if (!component.dcTable || !component.acTable) {
-          throw new Error("Invalid JPEG: scan references a missing Huffman table.");
-        }
-
-        scanComponents.push(component);
+        scanComponents.push(scanComponent);
       }
 
       this.offset = segmentEnd;
@@ -615,35 +625,105 @@
       const spectralStart = this.bytes[segmentEnd - 3];
       const spectralEnd = this.bytes[segmentEnd - 2];
       const successiveApproximation = this.bytes[segmentEnd - 1];
+      const successiveHigh = successiveApproximation >> 4;
+      const successiveLow = successiveApproximation & 15;
 
-      if (spectralStart !== 0 || spectralEnd !== 63 || successiveApproximation !== 0) {
-        throw new Error("Only sequential baseline JPEG scans are supported.");
-      }
+      this.validateScan(
+        scanComponents,
+        spectralStart,
+        spectralEnd,
+        successiveHigh,
+        successiveLow
+      );
 
       const scanStart = this.offset;
       const scanEnd = this.findScanEnd(scanStart);
       const bitReader = new JpegBitReader(this.bytes, scanStart, scanEnd);
 
-      this.decodeScan(bitReader, scanComponents);
+      if (this.progressive) {
+        this.decodeProgressiveScan(
+          bitReader,
+          scanComponents,
+          spectralStart,
+          spectralEnd,
+          successiveHigh,
+          successiveLow
+        );
+      } else {
+        this.decodeSequentialScan(bitReader, scanComponents);
+      }
+
       this.offset = scanEnd;
     }
 
     allocateBlocks() {
+      if (this.blocksAllocated) {
+        return;
+      }
+
       const mcusX = Math.ceil(this.width / (this.maxHorizontalSampling * 8));
       const mcusY = Math.ceil(this.height / (this.maxVerticalSampling * 8));
 
       this.components.forEach((component) => {
         component.blockCountX = mcusX * component.horizontalSampling;
         component.blockCountY = mcusY * component.verticalSampling;
+        component.coefficients = new Int32Array(component.blockCountX * component.blockCountY * 64);
         component.blocks = new Float32Array(component.blockCountX * component.blockCountY * 64);
         component.previousDc = 0;
       });
+
+      this.blocksAllocated = true;
     }
 
-    decodeScan(bitReader, scanComponents) {
+    validateScan(scanComponents, spectralStart, spectralEnd, successiveHigh, successiveLow) {
+      if (!this.progressive) {
+        if (spectralStart !== 0 || spectralEnd !== 63 || successiveHigh !== 0 || successiveLow !== 0) {
+          throw new Error("Only sequential baseline JPEG scans are supported for SOF0 images.");
+        }
+
+        scanComponents.forEach((scanComponent) => {
+          if (!scanComponent.dcTable || !scanComponent.acTable) {
+            throw new Error("Invalid JPEG: sequential scan references a missing Huffman table.");
+          }
+        });
+        return;
+      }
+
+      if (spectralStart < 0 || spectralStart > 63 || spectralEnd < spectralStart || spectralEnd > 63) {
+        throw new Error("Invalid progressive JPEG: bad spectral selection.");
+      }
+
+      if (successiveHigh !== 0 && successiveLow !== successiveHigh - 1) {
+        throw new Error("Invalid progressive JPEG: bad successive approximation.");
+      }
+
+      if (spectralStart === 0 && spectralEnd !== 0) {
+        throw new Error("Invalid progressive JPEG: DC scan must use spectral range 0..0.");
+      }
+
+      if (spectralStart > 0 && scanComponents.length !== 1) {
+        throw new Error("Invalid progressive JPEG: AC scans may contain only one component.");
+      }
+
+      scanComponents.forEach((scanComponent) => {
+        if (spectralStart === 0 && successiveHigh === 0 && !scanComponent.dcTable) {
+          throw new Error("Invalid progressive JPEG: DC scan references a missing Huffman table.");
+        }
+
+        if (spectralStart > 0 && !scanComponent.acTable) {
+          throw new Error("Invalid progressive JPEG: AC scan references a missing Huffman table.");
+        }
+      });
+    }
+
+    decodeSequentialScan(bitReader, scanComponents) {
       const mcusX = Math.ceil(this.width / (this.maxHorizontalSampling * 8));
       const mcusY = Math.ceil(this.height / (this.maxVerticalSampling * 8));
       let mcuIndex = 0;
+
+      scanComponents.forEach((scanComponent) => {
+        scanComponent.component.previousDc = 0;
+      });
 
       for (let mcuY = 0; mcuY < mcusY; mcuY += 1) {
         for (let mcuX = 0; mcuX < mcusX; mcuX += 1) {
@@ -653,19 +733,21 @@
             mcuIndex % this.restartInterval === 0
           ) {
             bitReader.alignToByte();
-            this.components.forEach((component) => {
-              component.previousDc = 0;
+            scanComponents.forEach((scanComponent) => {
+              scanComponent.component.previousDc = 0;
             });
           }
 
-          scanComponents.forEach((component) => {
+          scanComponents.forEach((scanComponent) => {
+            const component = scanComponent.component;
+
             for (let localY = 0; localY < component.verticalSampling; localY += 1) {
               for (let localX = 0; localX < component.horizontalSampling; localX += 1) {
                 const blockX = mcuX * component.horizontalSampling + localX;
                 const blockY = mcuY * component.verticalSampling + localY;
                 const blockIndex = blockY * component.blockCountX + blockX;
 
-                this.decodeBlock(bitReader, component, blockIndex);
+                this.decodeSequentialBlock(bitReader, scanComponent, blockIndex);
               }
             }
           });
@@ -675,18 +757,14 @@
       }
     }
 
-    decodeBlock(bitReader, component, blockIndex) {
+    decodeSequentialBlock(bitReader, scanComponent, blockIndex) {
+      const component = scanComponent.component;
       const coefficients = this.blockScratch;
-      const quantizationTable = this.quantizationTables[component.quantizationTableId];
       const blockOffset = blockIndex * 64;
-
-      if (!quantizationTable) {
-        throw new Error("Invalid JPEG: missing quantization table.");
-      }
 
       coefficients.fill(0);
 
-      const dcLength = decodeHuffmanValue(bitReader, component.dcTable);
+      const dcLength = decodeHuffmanValue(bitReader, scanComponent.dcTable);
       const dcDiff = receiveAndExtend(bitReader, dcLength);
       const dc = component.previousDc + dcDiff;
 
@@ -696,7 +774,7 @@
       let coefficientIndex = 1;
 
       while (coefficientIndex < 64) {
-        const value = decodeHuffmanValue(bitReader, component.acTable);
+        const value = decodeHuffmanValue(bitReader, scanComponent.acTable);
         const runLength = value >> 4;
         const size = value & 15;
 
@@ -720,8 +798,371 @@
       }
 
       for (let index = 0; index < 64; index += 1) {
-        component.blocks[blockOffset + index] = coefficients[index] * quantizationTable[index];
+        component.coefficients[blockOffset + index] = coefficients[index];
       }
+    }
+
+    decodeProgressiveScan(
+      bitReader,
+      scanComponents,
+      spectralStart,
+      spectralEnd,
+      successiveHigh,
+      successiveLow
+    ) {
+      const isDcScan = spectralStart === 0;
+
+      if (scanComponents.length === 1) {
+        this.decodeNonInterleavedProgressiveScan(
+          bitReader,
+          scanComponents[0],
+          spectralStart,
+          spectralEnd,
+          successiveHigh,
+          successiveLow
+        );
+        return;
+      }
+
+      if (!isDcScan) {
+        throw new Error("Invalid progressive JPEG: interleaved scans can only contain DC data.");
+      }
+
+      this.decodeInterleavedProgressiveDcScan(
+        bitReader,
+        scanComponents,
+        successiveHigh,
+        successiveLow
+      );
+    }
+
+    decodeInterleavedProgressiveDcScan(bitReader, scanComponents, successiveHigh, successiveLow) {
+      const mcusX = Math.ceil(this.width / (this.maxHorizontalSampling * 8));
+      const mcusY = Math.ceil(this.height / (this.maxVerticalSampling * 8));
+      let mcuIndex = 0;
+
+      scanComponents.forEach((scanComponent) => {
+        scanComponent.component.previousDc = 0;
+      });
+
+      for (let mcuY = 0; mcuY < mcusY; mcuY += 1) {
+        for (let mcuX = 0; mcuX < mcusX; mcuX += 1) {
+          if (
+            this.restartInterval > 0 &&
+            mcuIndex > 0 &&
+            mcuIndex % this.restartInterval === 0
+          ) {
+            bitReader.alignToByte();
+            scanComponents.forEach((scanComponent) => {
+              scanComponent.component.previousDc = 0;
+            });
+          }
+
+          scanComponents.forEach((scanComponent) => {
+            const component = scanComponent.component;
+
+            for (let localY = 0; localY < component.verticalSampling; localY += 1) {
+              for (let localX = 0; localX < component.horizontalSampling; localX += 1) {
+                const blockX = mcuX * component.horizontalSampling + localX;
+                const blockY = mcuY * component.verticalSampling + localY;
+                const blockIndex = blockY * component.blockCountX + blockX;
+
+                this.decodeProgressiveDcBlock(
+                  bitReader,
+                  scanComponent,
+                  blockIndex,
+                  successiveHigh,
+                  successiveLow
+                );
+              }
+            }
+          });
+
+          mcuIndex += 1;
+        }
+      }
+    }
+
+    decodeNonInterleavedProgressiveScan(
+      bitReader,
+      scanComponent,
+      spectralStart,
+      spectralEnd,
+      successiveHigh,
+      successiveLow
+    ) {
+      const component = scanComponent.component;
+      let eobRun = 0;
+      let blockCounter = 0;
+
+      component.previousDc = 0;
+
+      for (let blockY = 0; blockY < component.blockCountY; blockY += 1) {
+        for (let blockX = 0; blockX < component.blockCountX; blockX += 1) {
+          if (
+            this.restartInterval > 0 &&
+            blockCounter > 0 &&
+            blockCounter % this.restartInterval === 0
+          ) {
+            bitReader.alignToByte();
+            component.previousDc = 0;
+            eobRun = 0;
+          }
+
+          const blockIndex = blockY * component.blockCountX + blockX;
+
+          if (spectralStart === 0) {
+            this.decodeProgressiveDcBlock(
+              bitReader,
+              scanComponent,
+              blockIndex,
+              successiveHigh,
+              successiveLow
+            );
+          } else {
+            eobRun = this.decodeProgressiveAcBlock(
+              bitReader,
+              scanComponent,
+              blockIndex,
+              spectralStart,
+              spectralEnd,
+              successiveHigh,
+              successiveLow,
+              eobRun
+            );
+          }
+
+          blockCounter += 1;
+        }
+      }
+    }
+
+    decodeProgressiveDcBlock(bitReader, scanComponent, blockIndex, successiveHigh, successiveLow) {
+      const component = scanComponent.component;
+      const blockOffset = blockIndex * 64;
+
+      if (successiveHigh === 0) {
+        const dcLength = decodeHuffmanValue(bitReader, scanComponent.dcTable);
+        const dcDiff = receiveAndExtend(bitReader, dcLength);
+        const dc = component.previousDc + dcDiff;
+
+        component.previousDc = dc;
+        component.coefficients[blockOffset] = dc << successiveLow;
+        return;
+      }
+
+      if (bitReader.readBit()) {
+        component.coefficients[blockOffset] |= 1 << successiveLow;
+      }
+    }
+
+    decodeProgressiveAcBlock(
+      bitReader,
+      scanComponent,
+      blockIndex,
+      spectralStart,
+      spectralEnd,
+      successiveHigh,
+      successiveLow,
+      eobRun
+    ) {
+      const coefficients = scanComponent.component.coefficients;
+      const blockOffset = blockIndex * 64;
+
+      if (successiveHigh === 0) {
+        return this.decodeProgressiveAcFirstBlock(
+          bitReader,
+          scanComponent,
+          coefficients,
+          blockOffset,
+          spectralStart,
+          spectralEnd,
+          successiveLow,
+          eobRun
+        );
+      }
+
+      return this.decodeProgressiveAcRefineBlock(
+        bitReader,
+        scanComponent,
+        coefficients,
+        blockOffset,
+        spectralStart,
+        spectralEnd,
+        successiveLow,
+        eobRun
+      );
+    }
+
+    decodeProgressiveAcFirstBlock(
+      bitReader,
+      scanComponent,
+      coefficients,
+      blockOffset,
+      spectralStart,
+      spectralEnd,
+      successiveLow,
+      eobRun
+    ) {
+      if (eobRun > 0) {
+        return eobRun - 1;
+      }
+
+      let coefficientIndex = spectralStart;
+
+      while (coefficientIndex <= spectralEnd) {
+        const value = decodeHuffmanValue(bitReader, scanComponent.acTable);
+        const runLength = value >> 4;
+        const size = value & 15;
+
+        if (size === 0) {
+          if (runLength === 15) {
+            coefficientIndex += 16;
+            continue;
+          }
+
+          return (1 << runLength) + bitReader.readBits(runLength) - 1;
+        }
+
+        coefficientIndex += runLength;
+
+        if (coefficientIndex > spectralEnd) {
+          throw new Error("Invalid progressive JPEG: AC coefficient run exceeds spectral band.");
+        }
+
+        coefficients[blockOffset + ZIG_ZAG[coefficientIndex]] =
+          receiveAndExtend(bitReader, size) << successiveLow;
+        coefficientIndex += 1;
+      }
+
+      return 0;
+    }
+
+    decodeProgressiveAcRefineBlock(
+      bitReader,
+      scanComponent,
+      coefficients,
+      blockOffset,
+      spectralStart,
+      spectralEnd,
+      successiveLow,
+      eobRun
+    ) {
+      const positiveBit = 1 << successiveLow;
+      const negativeBit = -positiveBit;
+
+      if (eobRun > 0) {
+        this.refineNonZeroAcCoefficients(
+          bitReader,
+          coefficients,
+          blockOffset,
+          spectralStart,
+          spectralEnd,
+          positiveBit,
+          negativeBit
+        );
+        return eobRun - 1;
+      }
+
+      let coefficientIndex = spectralStart;
+
+      while (coefficientIndex <= spectralEnd) {
+        const value = decodeHuffmanValue(bitReader, scanComponent.acTable);
+        let runLength = value >> 4;
+        const size = value & 15;
+        let newCoefficient = 0;
+
+        if (size === 0) {
+          if (runLength < 15) {
+            eobRun = (1 << runLength) + bitReader.readBits(runLength);
+            break;
+          }
+
+          runLength = 16;
+        } else {
+          if (size !== 1) {
+            throw new Error("Invalid progressive JPEG: AC refinement coefficient has invalid size.");
+          }
+
+          newCoefficient = bitReader.readBit() ? positiveBit : negativeBit;
+        }
+
+        while (coefficientIndex <= spectralEnd) {
+          const coefficientOffset = blockOffset + ZIG_ZAG[coefficientIndex];
+          const coefficient = coefficients[coefficientOffset];
+
+          if (coefficient !== 0) {
+            if (bitReader.readBit()) {
+              coefficients[coefficientOffset] += coefficient > 0 ? positiveBit : negativeBit;
+            }
+          } else {
+            if (runLength === 0) {
+              break;
+            }
+
+            runLength -= 1;
+          }
+
+          coefficientIndex += 1;
+        }
+
+        if (newCoefficient !== 0) {
+          if (coefficientIndex > spectralEnd) {
+            throw new Error("Invalid progressive JPEG: AC refinement run exceeds spectral band.");
+          }
+
+          coefficients[blockOffset + ZIG_ZAG[coefficientIndex]] = newCoefficient;
+          coefficientIndex += 1;
+        }
+      }
+
+      if (eobRun > 0) {
+        this.refineNonZeroAcCoefficients(
+          bitReader,
+          coefficients,
+          blockOffset,
+          coefficientIndex,
+          spectralEnd,
+          positiveBit,
+          negativeBit
+        );
+        return eobRun - 1;
+      }
+
+      return 0;
+    }
+
+    refineNonZeroAcCoefficients(
+      bitReader,
+      coefficients,
+      blockOffset,
+      spectralStart,
+      spectralEnd,
+      positiveBit,
+      negativeBit
+    ) {
+      for (let coefficientIndex = spectralStart; coefficientIndex <= spectralEnd; coefficientIndex += 1) {
+        const coefficientOffset = blockOffset + ZIG_ZAG[coefficientIndex];
+        const coefficient = coefficients[coefficientOffset];
+
+        if (coefficient !== 0 && bitReader.readBit()) {
+          coefficients[coefficientOffset] += coefficient > 0 ? positiveBit : negativeBit;
+        }
+      }
+    }
+
+    dequantizeBlocks() {
+      this.components.forEach((component) => {
+        const quantizationTable = this.quantizationTables[component.quantizationTableId];
+
+        if (!quantizationTable) {
+          throw new Error("Invalid JPEG: missing quantization table.");
+        }
+
+        for (let index = 0; index < component.coefficients.length; index += 1) {
+          component.blocks[index] = component.coefficients[index] * quantizationTable[index & 63];
+        }
+      });
     }
 
     findScanEnd(start) {
