@@ -419,10 +419,293 @@ function percentile(sorted, value) {
 }
 
 function writeStatus(message) {
-  document.getElementById("result").textContent = `BENCHMARK_STATUS ${message}`;
+  const resultEl = document.getElementById("result");
+
+  resultEl.className = "benchmark-output benchmark-status";
+  resultEl.textContent = `BENCHMARK_STATUS ${message}`;
 }
 
 function writeResult(result) {
   window.__benchmarkResult = result;
-  document.getElementById("result").textContent = JSON.stringify(result, null, 2);
+  const resultEl = document.getElementById("result");
+
+  resultEl.className = "benchmark-output";
+  resultEl.replaceChildren();
+
+  if (!result.ok) {
+    resultEl.append(
+      createElement("h2", "Benchmark failed"),
+      createElement("pre", result.error || "Unknown benchmark error")
+    );
+    return;
+  }
+
+  resultEl.append(
+    createElement("h2", `${formatName(result.config.format)} decode benchmark`),
+    createSummaryGrid(result),
+    createTimingTable(result),
+    createSpeedupTable(result),
+    createRawJsonDetails(result)
+  );
+}
+
+function createSummaryGrid(result) {
+  const firstImage = result.dataset.firstImage || {};
+  const items = [
+    ["Format", formatName(result.config.format)],
+    ["Images", formatInteger(result.config.imageCount)],
+    ["Total bytes", formatBytes(result.dataset.totalBytes)],
+    ["Total pixels", formatInteger(result.dataset.totalPixels)],
+    ["Megapixels", formatNumber(result.dataset.megapixels, 3)],
+    ["First image", `${firstImage.width || 0} x ${firstImage.height || 0}`],
+  ];
+
+  return createDefinitionGrid(items);
+}
+
+function createTimingTable(result) {
+  const rows = getTimingRows(result);
+  const table = createTable(
+    ["Decoder", "Total", "Measured", "Avg", "Trimmed avg", "Median", "P95", "Min", "Max", "Samples"],
+    rows.map((row) => [
+      row.label,
+      formatMs(row.summary.totalMs),
+      formatMs(row.summary.measuredMs),
+      formatMs(row.summary.avgMs),
+      formatMs(row.summary.trimmedAvgMs),
+      formatMs(row.summary.medianMs),
+      formatMs(row.summary.p95Ms),
+      formatMs(row.summary.minMs),
+      formatMs(row.summary.maxMs),
+      formatInteger(row.summary.samples),
+    ])
+  );
+
+  return createSection("Timings", table);
+}
+
+function createSpeedupTable(result) {
+  const rows = getSpeedupRows(result);
+
+  if (rows.length === 0) {
+    return document.createDocumentFragment();
+  }
+
+  const table = createTable(
+    ["Comparison", "Total", "Median", "Trimmed avg"],
+    rows.map((row) => [
+      row.label,
+      formatRatio(row.total),
+      formatRatio(row.median),
+      formatRatio(row.trimmed),
+    ])
+  );
+
+  return createSection("Speedups", table);
+}
+
+function createRawJsonDetails(result) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  const pre = document.createElement("pre");
+
+  summary.textContent = "Raw JSON";
+  pre.textContent = JSON.stringify(result, null, 2);
+  details.append(summary, pre);
+
+  return details;
+}
+
+function getTimingRows(result) {
+  const rows = [
+    ["nativeDecode", "Native browser"],
+    ["wasmDecode", "WASM JPEG"],
+    ["wasmGpuDecode", "WASM+GPU JPEG"],
+    ["gpuDecode", "GPU JPEG"],
+    ["wasmWebpDecode", "WASM WebP"],
+  ];
+
+  return rows
+    .filter(([key]) => result[key])
+    .map(([key, label]) => ({ label, summary: result[key] }));
+}
+
+function getSpeedupRows(result) {
+  const speedup = result.speedup || {};
+
+  if (result.config.format === "webp") {
+    return [{
+      label: "WASM WebP vs Native browser",
+      total: speedup.wasmWebpTotalVsNative,
+      median: speedup.wasmWebpMedianVsNative,
+      trimmed: speedup.wasmWebpTrimmedAverageVsNative,
+    }];
+  }
+
+  return [
+    {
+      label: "WASM JPEG vs Native browser",
+      total: speedup.wasmTotalVsNative,
+      median: speedup.wasmMedianVsNative,
+      trimmed: speedup.wasmTrimmedAverageVsNative,
+    },
+    {
+      label: "WASM+GPU JPEG vs Native browser",
+      total: speedup.wasmGpuTotalVsNative,
+      median: speedup.wasmGpuMedianVsNative,
+      trimmed: speedup.wasmGpuTrimmedAverageVsNative,
+    },
+    {
+      label: "GPU JPEG vs Native browser",
+      total: speedup.gpuTotalVsNative,
+      median: speedup.gpuMedianVsNative,
+      trimmed: speedup.gpuTrimmedAverageVsNative,
+    },
+    {
+      label: "GPU JPEG vs WASM JPEG",
+      total: speedup.gpuTotalVsWasm,
+      median: null,
+      trimmed: speedup.gpuTrimmedAverageVsWasm,
+    },
+    {
+      label: "WASM+GPU JPEG vs WASM JPEG",
+      total: speedup.wasmGpuTotalVsWasm,
+      median: null,
+      trimmed: speedup.wasmGpuTrimmedAverageVsWasm,
+    },
+    {
+      label: "WASM+GPU JPEG vs GPU JPEG",
+      total: speedup.wasmGpuTotalVsGpu,
+      median: null,
+      trimmed: speedup.wasmGpuTrimmedAverageVsGpu,
+    },
+  ];
+}
+
+function createSection(title, child) {
+  const section = document.createElement("section");
+
+  section.className = "benchmark-section";
+  section.append(createElement("h3", title), child);
+
+  return section;
+}
+
+function createDefinitionGrid(items) {
+  const grid = document.createElement("dl");
+
+  grid.className = "benchmark-summary";
+
+  items.forEach(([label, value]) => {
+    const item = document.createElement("div");
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+
+    term.textContent = label;
+    description.textContent = value;
+    item.append(term, description);
+    grid.append(item);
+  });
+
+  return grid;
+}
+
+function createTable(headers, rows) {
+  const wrapper = document.createElement("div");
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const tbody = document.createElement("tbody");
+  const headRow = document.createElement("tr");
+
+  wrapper.className = "benchmark-table-wrap";
+
+  headers.forEach((header) => {
+    const th = document.createElement("th");
+
+    th.textContent = header;
+    headRow.append(th);
+  });
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+
+    row.forEach((cell) => {
+      const td = document.createElement("td");
+
+      td.textContent = cell;
+      tr.append(td);
+    });
+
+    tbody.append(tr);
+  });
+
+  thead.append(headRow);
+  table.append(thead, tbody);
+  wrapper.append(table);
+
+  return wrapper;
+}
+
+function createElement(tagName, text) {
+  const element = document.createElement(tagName);
+
+  element.textContent = text;
+
+  return element;
+}
+
+function formatName(value) {
+  return String(value || "").toUpperCase();
+}
+
+function formatMs(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  return `${formatNumber(value, 2)} ms`;
+}
+
+function formatRatio(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  return `${formatNumber(value, 2)}x`;
+}
+
+function formatNumber(value, digits) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  });
+}
+
+function formatInteger(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  return Math.round(value).toLocaleString();
+}
+
+function formatBytes(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let scaled = value;
+  let unitIndex = 0;
+
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${formatNumber(scaled, unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
 }

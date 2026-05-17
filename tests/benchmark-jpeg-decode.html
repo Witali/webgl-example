@@ -3,9 +3,14 @@
   <head>
     <meta charset="utf-8">
     <title>JPEG Decode Benchmark</title>
+    <link rel="stylesheet" href="./visual-jpeg-compare.css">
   </head>
   <body>
-    <pre id="result">BENCHMARK_RESULT_PENDING</pre>
+    <main>
+      <section id="result" class="benchmark-output" aria-live="polite">
+        BENCHMARK_RESULT_PENDING
+      </section>
+    </main>
     <script src="../gpu-jpeg.js"></script>
     <script src="../wasm-jpeg.js"></script>
     <script src="../wasm-gpu-jpeg.js"></script>
