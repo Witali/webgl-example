@@ -1,3 +1,10 @@
+/*
+ * Purpose: WebGL demo entry point that renders the rotating textured cube.
+ * Processing blocks:
+ * - Load cube shaders and create the WebGL program.
+ * - Upload geometry, normals, texture coordinates, and texture data.
+ * - Run the animation loop, update matrices, and draw each frame.
+ */
 "use strict";
 
 const canvas = document.getElementById("gl-canvas");
@@ -13,6 +20,7 @@ if (!gl) {
   throw new Error("WebGL is not supported");
 }
 
+// Static cube geometry: each face has distinct vertices so normals and UVs stay simple.
 const positions = new Float32Array([
   // Front
   -1, -1,  1,
@@ -124,6 +132,7 @@ const indices = new Uint16Array([
   20, 21, 22,  20, 22, 23,
 ]);
 
+// WebGL resources and matrices that are created once and reused each frame.
 let program = null;
 let locations = null;
 let positionBuffer = null;
@@ -144,6 +153,7 @@ start().catch((error) => {
   document.body.textContent = `WebGL cube startup failed: ${error.message}`;
 });
 
+// Startup compiles shaders, uploads geometry, initializes GL state, and starts rendering.
 async function start() {
   const shaderSources = await loadShaderPair(CUBE_SHADER_URLS);
 
@@ -189,6 +199,7 @@ async function start() {
   requestAnimationFrame(render);
 }
 
+// Per-frame work: resize, update matrices, bind current resources, and draw the cube.
 function render(time) {
   updateFpsCounter(time);
   resizeCanvasToDisplaySize();
@@ -237,6 +248,7 @@ function updateFpsCounter(time) {
   }
 }
 
+// Shader helpers fetch GLSL files, compile both stages, and link a program.
 async function loadShaderPair(urls) {
   const [vertex, fragment] = await Promise.all([
     loadText(urls.vertex),
@@ -315,6 +327,7 @@ function bindCubeGeometry() {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
 }
 
+// Texture helpers provide an immediate placeholder and then replace it with decoded image data.
 function createSolidTexture(color) {
   const texture = gl.createTexture();
 
@@ -379,6 +392,7 @@ function resizeCanvasToDisplaySize() {
   }
 }
 
+// Small matrix/vector helpers keep the demo self-contained without a math dependency.
 function mat4Create() {
   return new Float32Array(16);
 }

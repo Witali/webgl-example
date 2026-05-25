@@ -1,3 +1,10 @@
+/*
+ * Purpose: CLI smoke runner for the interactive visual comparison page.
+ * Processing blocks:
+ * - Open tests/visual-jpeg-compare.html with a selected image and decoder.
+ * - Wait until metrics are populated in the DOM.
+ * - Print the visible metrics, comparison stats, and optional timing details.
+ */
 "use strict";
 
 const path = require("path");

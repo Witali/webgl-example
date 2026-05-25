@@ -1,3 +1,10 @@
+/*
+ * Purpose: Minimal Node browser harness for local image tests without Playwright.
+ * Processing blocks:
+ * - Start a temporary static file server and launch Edge/Chrome with DevTools.
+ * - Poll the target page by evaluating a result expression.
+ * - Use a small WebSocket client to talk to the DevTools protocol.
+ */
 "use strict";
 
 const crypto = require("crypto");
@@ -8,6 +15,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 
+// End-to-end harness: serve files, launch a browser, poll DevTools, and clean up.
 async function runBrowserPage(options) {
   const projectRoot = options.projectRoot;
   const browserPath = resolveBrowserExecutable();
@@ -110,6 +118,7 @@ function createBrowserEnv() {
   return env;
 }
 
+// Browser resolution supports explicit paths, common Edge/Chrome names, and Windows default browser.
 function resolveBrowserExecutable() {
   const requestedBrowser = process.env.BROWSER || "edge";
 
@@ -189,6 +198,7 @@ function expandWindowsEnvironment(value) {
   });
 }
 
+// Static server keeps tests close to production browser behavior while blocking path traversal.
 function createStaticServer(projectRoot) {
   return http.createServer((request, response) => {
     const requestUrl = new URL(request.url, "http://127.0.0.1");
@@ -258,6 +268,7 @@ function createBrowserArgs({ debugPort, userDataDir, url }) {
   return browserArgs;
 }
 
+// DevTools polling waits for the page target and evaluates the caller's result expression.
 async function pollForResult(options) {
   const target = await waitForPageTarget(
     options.debugPort,
@@ -396,6 +407,7 @@ function delay(ms) {
   });
 }
 
+// Tiny WebSocket client is enough for the Chrome DevTools request/response pattern used here.
 class DevToolsWebSocket {
   constructor(socket) {
     this.socket = socket;
@@ -510,6 +522,7 @@ class DevToolsWebSocket {
   }
 }
 
+// WebSocket frame helpers implement just the text-frame subset needed by DevTools.
 function encodeClientFrame(text) {
   const payload = Buffer.from(text, "utf8");
   const mask = crypto.randomBytes(4);

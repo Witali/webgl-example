@@ -1,3 +1,10 @@
+/*
+ * Purpose: Fragment shader for the rotating cube's textured lighting.
+ * Processing blocks:
+ * - Normalize interpolated normals and compute a diffuse light term.
+ * - Sample the stone texture.
+ * - Combine ambient and diffuse light into the final color.
+ */
 precision mediump float;
 
 varying vec3 vNormal;

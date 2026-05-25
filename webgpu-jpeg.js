@@ -1,3 +1,11 @@
+/*
+ * Purpose: WebGPU JPEG decoder that can keep entropy, IDCT, and rendering work
+ * on the GPU for benchmark and comparison paths.
+ * Processing blocks:
+ * - Pre-scan or parse JPEG metadata and entropy intervals.
+ * - Decode Huffman-coded coefficient blocks into GPU storage buffers.
+ * - Run IDCT/color conversion and optionally render/read back RGBA pixels.
+ */
 (function (global) {
   "use strict";
 
@@ -25,6 +33,7 @@
   const META_SCAN_OFFSET = META_COMPONENT_OFFSET + 3 * COMPONENT_STRIDE;
   const META_LENGTH = META_SCAN_OFFSET + 3 * SCAN_STRIDE;
 
+  // Compute stage that decodes entropy intervals directly on the GPU.
   const ENTROPY_SHADER = `
     @group(0) @binding(0) var<storage, read> jpegBytes: array<u32>;
     @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
@@ -306,6 +315,7 @@
     }
   `;
 
+  // Alternate compute stage for ranges that were pre-scanned on the CPU.
   const PRESCAN_ENTROPY_SHADER = `
     @group(0) @binding(0) var<storage, read> jpegBytes: array<u32>;
     @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
@@ -547,6 +557,7 @@
     }
   `;
 
+  // Compute stage that turns coefficient buffers into planar Y/Cb/Cr samples.
   const IDCT_SHADER = `
     @group(0) @binding(0) var<storage, read> coeffs: array<i32>;
     @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
@@ -632,6 +643,7 @@
     }
   `;
 
+  // Render stage that samples decoded planes, upsamples chroma, and writes RGBA.
   const RENDER_SHADER = `
     @group(0) @binding(0) var<storage, read> componentPixels: array<i32>;
     @group(0) @binding(1) var<storage, read> jpegMeta: array<i32>;
@@ -737,6 +749,7 @@
     }
   `;
 
+  // Public WebGPU decoder facade: owns device resources and schedules decode passes.
   class WebGpuJpegDecoder {
     constructor(device, options = {}) {
       this.device = device;
@@ -1430,6 +1443,7 @@
     }
   }
 
+  // Parser builds the compact metadata layout consumed by WebGPU shaders.
   function parseGpuResidentJpeg(arrayBuffer) {
     const bytes = arrayBuffer instanceof Uint8Array
       ? arrayBuffer
@@ -1530,6 +1544,7 @@
     }
   }
 
+  // Entropy tasks split coefficient decoding into restart-safe blocks for GPU workgroups.
   function createEntropyBlockTasks(jpeg) {
     const previousDc = new Int32Array(3);
     const totalBlocks = jpeg.totalCoefficientCount / 64;
@@ -1595,6 +1610,7 @@
     };
   }
 
+  // CPU pre-scan mirrors Huffman traversal just far enough to find block boundaries.
   function readBlockForPreScan(reader, jpeg, dcSlot, acSlot) {
     const dcLength = decodeCpuHuffman(reader, jpeg, dcSlot);
     const dcDiff = receiveAndExtendCpu(reader, dcLength);
@@ -1666,6 +1682,7 @@
     return value;
   }
 
+  // GPU Huffman tables flatten canonical code ranges into storage-buffer arrays.
   function buildGpuHuffmanTables(tables) {
     const min = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
     const max = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
@@ -1710,6 +1727,7 @@
     return { min, max, valOffset, symbols };
   }
 
+  // Metadata buffers pack image, quantization, component, and scan descriptors.
   function createMetadata(jpeg, params) {
     const metadata = new Int32Array(META_LENGTH);
 
@@ -1753,6 +1771,7 @@
     return buffer;
   }
 
+  // Readback is isolated so benchmark modes can separate GPU work from transfer cost.
   async function readPixelBuffer(device, pixelBuffer, width, height) {
     const byteLength = width * height * 4;
     const readBuffer = device.createBuffer({

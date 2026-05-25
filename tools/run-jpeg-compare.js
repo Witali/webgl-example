@@ -1,3 +1,10 @@
+/*
+ * Purpose: CLI smoke runner for the single-image JPEG comparison page.
+ * Processing blocks:
+ * - Start the browser harness on tests/compare-jpeg-decode.html.
+ * - Pass the requested image path through the query string.
+ * - Print the comparison JSON and return a success/failure exit code.
+ */
 "use strict";
 
 const path = require("path");

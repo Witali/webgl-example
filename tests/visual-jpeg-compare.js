@@ -1,5 +1,14 @@
+/*
+ * Purpose: Interactive visual comparison page for browser, JS, WASM, WebGL,
+ * WebGPU, and WebP decoders.
+ * Processing blocks:
+ * - Resolve selected/uploaded images and choose a matching decoder.
+ * - Decode with the browser and selected library path.
+ * - Draw source/result/diff canvases, synced zoom state, metrics, and timing text.
+ */
 "use strict";
 
+// DOM references and static configuration for the comparison controls and metrics.
 const form = document.getElementById("controls");
 const imageInput = document.getElementById("image-url");
 const decoderSelect = document.getElementById("decoder");
@@ -62,6 +71,7 @@ let assetImageUrls = STATIC_ASSET_JPEGS.slice();
 
 initializeCanvasZoom();
 
+// UI event wiring keeps image selection, uploads, diff scaling, and decoder choice in sync.
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   runVisualCompare();
@@ -116,6 +126,7 @@ if (uploadButton && fileInput) {
 
 initializeImageSelect().then(runVisualCompare);
 
+// Main comparison path: decode both images, draw canvases, compute diffs, and update status.
 async function runVisualCompare() {
   const imageUrl = imageInput.value.trim();
   const decoder = decoderSelect.value;
@@ -168,6 +179,7 @@ async function runVisualCompare() {
   }
 }
 
+// Decoder dispatch normalizes GPU textures, pixel buffers, WebGPU paths, and WebP decoders.
 async function decodeWithLibrary(url, decoder) {
   if (decoder === "webp-js") {
     if (!webpJsDecoderPromise) {
@@ -274,6 +286,7 @@ async function decodeWithLibrary(url, decoder) {
   };
 }
 
+// Browser decode is the visual reference path used for every comparison.
 async function decodeWithBrowser(url) {
   const image = await loadImage(url);
   const canvas = document.createElement("canvas");
@@ -343,6 +356,7 @@ function drawPixels(canvas, image) {
   context.putImageData(new ImageData(image.pixels, image.width, image.height), 0, 0);
 }
 
+// Synchronized wheel zoom applies the same scale/origin to source, decoded, and diff canvases.
 function initializeCanvasZoom() {
   comparisonCanvases.forEach((canvas) => {
     const viewport = document.createElement("div");
@@ -403,6 +417,7 @@ function applyCanvasZoom(canvas, state) {
   canvas.style.setProperty("--image-zoom-origin-y", `${state.originY.toFixed(2)}%`);
 }
 
+// Pixel comparison renders a magnified diff image and records aggregate mismatch metrics.
 function createDiffImage(actual, expected, width, height, scale) {
   const pixels = new Uint8ClampedArray(width * height * 4);
 
@@ -560,6 +575,7 @@ function updateDiffScaleLabel() {
   }
 }
 
+// Asset discovery fills the image dropdown from static entries and optional manifests.
 async function initializeImageSelect() {
   const requestedImage = params.get("image") || DEFAULT_IMAGE_URL;
 
@@ -683,6 +699,7 @@ function isWebpFile(file) {
   return /\.webp$/i.test(file.name);
 }
 
+// Decoder choice follows image format so WebP fixtures do not accidentally hit JPEG-only paths.
 function syncDecoderToImage(url) {
   if (isWebpUrl(url)) {
     if (decoderSelect.value !== "webp-js" && decoderSelect.value !== "webp-wasm") {

@@ -1,3 +1,11 @@
+/*
+ * Purpose: Browser-side JPEG decoder that parses JPEG entropy on the CPU and
+ * reconstructs pixels with a WebGL IDCT/color shader.
+ * Processing blocks:
+ * - Parse baseline/progressive JPEG markers, Huffman streams, and coefficients.
+ * - Upload dequantized coefficient atlases as float textures.
+ * - Render a fullscreen quad through the IDCT shader and expose the result texture.
+ */
 (function (global) {
   "use strict";
 
@@ -19,6 +27,7 @@
   let gpuShaderSourcePromise = null;
   let gpuShaderSources = null;
 
+  // Public decoder facade: parse entropy on the CPU, then render coefficients through WebGL.
   class GpuJpegDecoder {
     static async create(gl) {
       await GpuJpegDecoder.loadShaderSources();
@@ -159,6 +168,7 @@
       };
     }
 
+    // GL program setup is lazy so tests can parse JPEGs without creating shader resources.
     ensureProgram() {
       if (this.programInfo) {
         return;
@@ -263,6 +273,7 @@
       );
     }
 
+    // Coefficient atlases store dequantized 8x8 blocks in natural raster order for the shader.
     createCoefficientTexture(component) {
       const gl = this.gl;
       const texture = gl.createTexture();
@@ -335,6 +346,7 @@
     }
   }
 
+  // CPU JPEG parser: converts marker segments and entropy-coded scans into coefficient blocks.
   class JpegBaselineParser {
     constructor(bytes) {
       this.bytes = bytes;
@@ -426,6 +438,7 @@
       };
     }
 
+    // Marker parsers collect frame metadata, quantization tables, Huffman tables, and scan data.
     parseStartOfFrame(segmentEnd, progressive) {
       const precision = this.readUint8();
 
@@ -641,6 +654,7 @@
       });
     }
 
+    // Sequential scans produce all coefficients for each MCU in one pass.
     decodeSequentialScan(bitReader, scanComponents) {
       const mcusX = Math.ceil(this.width / (this.maxHorizontalSampling * 8));
       const mcusY = Math.ceil(this.height / (this.maxVerticalSampling * 8));
@@ -727,6 +741,7 @@
       }
     }
 
+    // Progressive scans may arrive in several spectral/refinement passes over the same blocks.
     decodeProgressiveScan(
       bitReader,
       scanComponents,
@@ -1090,6 +1105,7 @@
       });
     }
 
+    // Scan-end detection must distinguish entropy byte stuffing from real JPEG markers.
     findScanEnd(start) {
       let index = start;
 
@@ -1265,6 +1281,7 @@
     return value;
   }
 
+  // Shader loading is shared by the WebGL-only and WASM-assisted GPU decoders.
   async function loadGpuShaderSources() {
     const [vertex, fragment] = await Promise.all([
       fetchText(GPU_SHADER_URLS.vertex),

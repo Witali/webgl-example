@@ -1,3 +1,10 @@
+/*
+ * Purpose: CLI wrapper around the browser benchmark page.
+ * Processing blocks:
+ * - Convert command-line arguments and environment flags into query parameters.
+ * - Run tests/benchmark-jpeg-decode.html in the browser harness.
+ * - Print the benchmark JSON and propagate failure through the process exit code.
+ */
 "use strict";
 
 const path = require("path");

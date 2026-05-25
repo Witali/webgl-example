@@ -1,3 +1,11 @@
+/*
+ * Purpose: Asset helper that asks a real browser to encode selected JPEG
+ * fixtures into WebP files.
+ * Processing blocks:
+ * - Serve the project through the browser harness.
+ * - Draw each source image to a canvas and export image/webp.
+ * - Write the generated WebP assets back into the repo.
+ */
 "use strict";
 
 const fs = require("fs");
@@ -38,6 +46,7 @@ main().catch((error) => {
   process.exit(1);
 });
 
+// Encode each configured source image and write the browser-produced WebP bytes to disk.
 async function main() {
   for (const asset of assets) {
     const result = await encodeWithBrowser(asset.source);
@@ -54,6 +63,7 @@ async function main() {
   }
 }
 
+// Browser encoding is driven by evaluating a self-contained canvas/toBlob expression.
 function encodeWithBrowser(source) {
   return runBrowserPage({
     projectRoot,

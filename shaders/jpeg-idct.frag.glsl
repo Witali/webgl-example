@@ -1,3 +1,10 @@
+/*
+ * Purpose: Fragment shader that reconstructs JPEG pixels from coefficient textures.
+ * Processing blocks:
+ * - Evaluate the 8x8 inverse DCT for each component sample.
+ * - Upsample chroma components to image pixels.
+ * - Convert grayscale or YCbCr values into final RGBA output.
+ */
 precision highp float;
 
 const float PI = 3.141592653589793;
@@ -17,6 +24,7 @@ uniform vec2 uSampleScale0;
 uniform vec2 uSampleScale1;
 uniform vec2 uSampleScale2;
 
+// IDCT basis and coefficient sampling reconstruct one component-space sample.
 float basis(float local, float frequency) {
   return cos(((2.0 * local + 1.0) * frequency * PI) / 16.0);
 }
@@ -66,6 +74,7 @@ float decodeRoundedComponentPixel(
   return clamp(floor(decodeComponentPixel(coeffTexture, coeffSize, componentPixel) + 0.5), 0.0, 255.0);
 }
 
+// Component decode maps image pixels into each component plane and interpolates subsampled chroma.
 float decodeComponent(
   sampler2D coeffTexture,
   vec2 coeffSize,

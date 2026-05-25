@@ -1,3 +1,11 @@
+/*
+ * Purpose: Browser benchmark runner for native, WASM, WebGL, WebGPU, and WebP
+ * image decoding paths.
+ * Processing blocks:
+ * - Load fixture manifests and image bytes.
+ * - Warm up and time each decoder implementation.
+ * - Aggregate timing phases, render tables, and expose machine-readable results.
+ */
 "use strict";
 
 const params = new URLSearchParams(window.location.search);
@@ -17,6 +25,7 @@ runBenchmark().catch((error) => {
   });
 });
 
+// Benchmark dispatcher chooses JPEG or WebP fixtures and gathers all requested decoder timings.
 async function runBenchmark() {
   if (format === "webp") {
     await runWebpBenchmark();
@@ -168,6 +177,7 @@ async function runBenchmark() {
   writeResult(result);
 }
 
+// WebP benchmark focuses on browser, WASM/libwebp, and pure-JS WebP decode paths.
 async function runWebpBenchmark() {
   writeStatus("loading WebP manifest");
 
@@ -249,6 +259,7 @@ async function fetchJson(url) {
   return response.json();
 }
 
+// Dataset loading keeps bytes, blobs, and aggregate size information reusable across decoders.
 async function fetchImages(urls) {
   return Promise.all(urls.map(async (url) => {
     const response = await fetch(url);
@@ -282,6 +293,7 @@ function createDataset(loadedImages, totalBytes, totalPixels) {
   };
 }
 
+// WebGPU setup is isolated because it may be skipped when unavailable or disabled.
 async function createWebGpuState(options) {
   if (!includeWebGpu) {
     return {
@@ -429,6 +441,7 @@ function applyPhaseTotals(summary, totals) {
   }
 }
 
+// Native browser paths provide both ImageBitmap/canvas and HTMLImageElement baselines.
 async function runNativeDecode(images, options) {
   const timings = [];
   const mimeType = options.mimeType || "image/jpeg";
@@ -536,6 +549,7 @@ async function runAsyncPixelDecode(decoder, images, options) {
   return summary;
 }
 
+// Decoder runners time only decode work unless readback is explicitly requested.
 function runWasmDecode(decoder, images, options) {
   const timings = [];
   const phaseTotals = createPhaseTotals();
@@ -682,6 +696,7 @@ function readTexture(gl, texture, width, height) {
   return pixels;
 }
 
+// Summary helpers aggregate raw samples into totals, percentiles, and UI tables.
 function summarizeTimings(timings, totalMs) {
   const sorted = timings.slice().sort((a, b) => a - b);
   const sum = timings.reduce((current, value) => current + value, 0);

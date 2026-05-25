@@ -1,8 +1,17 @@
+/*
+ * Purpose: Hybrid JPEG decoder that reuses the WebGL shader path while using
+ * WASM to pack coefficient atlases faster than JavaScript loops.
+ * Processing blocks:
+ * - Load the shared JPEG WASM module.
+ * - Copy parsed coefficient blocks into WASM memory.
+ * - Pack a float atlas and upload it to the WebGL IDCT renderer.
+ */
 (function (global) {
   "use strict";
 
   const PAGE_SIZE = 65536;
 
+  // Extends the WebGL JPEG decoder by replacing JavaScript atlas packing with a WASM helper.
   class WasmGpuJpegDecoder extends global.GpuJpegDecoder {
     constructor(gl, instance) {
       super(gl);
@@ -12,6 +21,7 @@
       this.memory = this.exports.memory;
     }
 
+    // Load both the shared WebGL shaders and the WASM module used for atlas packing.
     static async create(gl, url) {
       await global.GpuJpegDecoder.loadShaderSources();
 
@@ -39,6 +49,7 @@
       return new WasmGpuJpegDecoder(gl, result.instance);
     }
 
+    // Pack one component's coefficient blocks into a float RGBA atlas before uploading to WebGL.
     createCoefficientTexture(component) {
       const gl = this.gl;
       const texture = gl.createTexture();

@@ -1,9 +1,18 @@
+/*
+ * Purpose: WASM-backed JPEG decoder that runs IDCT/color conversion in
+ * jpeg-idct.wasm after JavaScript parses JPEG entropy.
+ * Processing blocks:
+ * - Parse JPEG markers and coefficients through GpuJpegDecoder.parse.
+ * - Lay out component buffers, basis tables, temp storage, and RGBA output in WASM memory.
+ * - Invoke the slow or fast WASM decode export and return a pixel view.
+ */
 (function (global) {
   "use strict";
 
   const BASIS_VALUES = new Float32Array(64);
   const PAGE_SIZE = 65536;
 
+  // Precompute the 8x8 IDCT cosine basis once and copy it into WASM memory as needed.
   for (let local = 0; local < 8; local += 1) {
     for (let frequency = 0; frequency < 8; frequency += 1) {
       const scale = frequency === 0 ? Math.SQRT1_2 : 1;
@@ -13,6 +22,7 @@
     }
   }
 
+  // Public WASM decoder facade: JavaScript handles JPEG parsing, WASM handles pixel reconstruction.
   class WasmJpegDecoder {
     constructor(instance) {
       this.instance = instance;
@@ -25,6 +35,7 @@
       this.ensureBasis();
     }
 
+    // Instantiate from the compiled WAT artifact, falling back when streaming compile is unavailable.
     static async create(url) {
       const wasmUrl = url || "wasm/jpeg-idct.wasm";
       let result;
@@ -60,6 +71,7 @@
       return this.decode(await response.arrayBuffer());
     }
 
+    // Decode flow: parse JPEG, prepare memory, run WASM, and return an RGBA view.
     decode(arrayBuffer) {
       const parseStarted = performance.now();
       const jpeg = global.GpuJpegDecoder.parse(arrayBuffer);
@@ -163,6 +175,7 @@
       );
     }
 
+    // Memory layout keeps component coefficients, optional planes, temp space, and output contiguous.
     createMemoryLayout(jpeg) {
       let offset = align(this.basisBytes, 4);
       const components = jpeg.components.map((component) => {

@@ -1,3 +1,11 @@
+/*
+ * Purpose: Browser test page script that compares one GPU JPEG decode against
+ * the native browser decode.
+ * Processing blocks:
+ * - Decode the same image with GpuJpegDecoder and an HTMLImageElement canvas path.
+ * - Read the GPU output texture back to pixels.
+ * - Compare channels and publish a JSON result for the Node harness.
+ */
 "use strict";
 
 const RESULT_START = "COMPARE_RESULT_START";
@@ -12,6 +20,7 @@ runComparison().catch((error) => {
   });
 });
 
+// Main smoke test flow: decode through the GPU path, decode natively, then compare pixels.
 async function runComparison() {
   writeStatus("creating WebGL context");
   const glCanvas = document.createElement("canvas");
@@ -69,6 +78,7 @@ function writeResult(result) {
     `${RESULT_START}${JSON.stringify(result)}${RESULT_END}`;
 }
 
+// GPU textures are read back through a temporary framebuffer for byte-level comparison.
 function readTextureTopLeft(gl, texture, width, height) {
   const framebuffer = gl.createFramebuffer();
   const bottomLeftPixels = new Uint8Array(width * height * 4);
@@ -101,6 +111,7 @@ function readTextureTopLeft(gl, texture, width, height) {
   return topLeftPixels;
 }
 
+// Native browser decode provides the expected RGBA pixels.
 async function decodeWithBrowser(url) {
   const image = await loadImage(url);
   const canvas = document.createElement("canvas");
@@ -127,6 +138,7 @@ function loadImage(url) {
   });
 }
 
+// Comparison keeps both quick pass/fail data and the first mismatches for debugging.
 function comparePixels(actual, expected, width, height) {
   let mismatchBytes = 0;
   let mismatchPixels = 0;

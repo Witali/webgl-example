@@ -1,6 +1,14 @@
+/*
+ * Purpose: Pure JavaScript lossy WebP/VP8 decoder for browser-side experiments.
+ * Processing blocks:
+ * - Parse RIFF WebP and VP8 key-frame headers.
+ * - Decode VP8 modes, Huffman-like coefficient tokens, prediction, IDCT/WHT, and loop filtering.
+ * - Convert filtered YUV planes into RGBA pixels with chroma upsampling.
+ */
 (function (global) {
   "use strict";
 
+  // Compact VP8 probability and quantization tables are stored as base64 to keep load-time setup small.
   const DC_Q_BASE64 = "BAAFAAYABwAIAAkACgAKAAsADAANAA4ADwAQABEAEQASABMAFAAUABUAFQAWABYAFwAXABgAGQAZABoAGwAcAB0AHgAfACAAIQAiACMAJAAlACUAJgAnACgAKQAqACsALAAtAC4ALgAvADAAMQAyADMANAA1ADYANwA4ADkAOgA7ADwAPQA+AD8AQABBAEIAQwBEAEUARgBHAEgASQBKAEsATABMAE0ATgBPAFAAUQBSAFMAVABVAFYAVwBYAFkAWwBdAF8AYABiAGQAZQBmAGgAagBsAG4AcAByAHQAdgB6AHwAfgCAAIIAhACGAIgAigCMAI8AkQCUAJcAmgCdAA==";
   const AC_Q_BASE64 = "BAAFAAYABwAIAAkACgALAAwADQAOAA8AEAARABIAEwAUABUAFgAXABgAGQAaABsAHAAdAB4AHwAgACEAIgAjACQAJQAmACcAKAApACoAKwAsAC0ALgAvADAAMQAyADMANAA1ADYANwA4ADkAOgA8AD4AQABCAEQARgBIAEoATABOAFAAUgBUAFYAWABaAFwAXgBgAGIAZABmAGgAagBsAG4AcAByAHQAdwB6AH0AgACDAIYAiQCMAI8AkgCVAJgAmwCeAKEApACnAKoArQCxALUAuQC9AMEAxQDJAM0A0QDVANkA3QDhAOUA6gDvAPUA+QD+AAMBCAENARIBFwEcAQ==";
   const BMODE_PROBS_BASE64 = "53gwWXNxeJhwmLNAfqp2LkZfr0WPUFVSSJtnODoKq9q9EQ2YkEcKJqvVkCIachoRoyzDFQqteRhQwxo+LEBVqi43E4igIc5HPxQIcnLQDAniUSgLYLZUHRAkhrdZiWJlaqWUSLtkgp1vIEtQQmanY0o+KOqAKTUJsvGNGghraE8MG9n/VxEHSisakkmmMRedQSZpoDM0H3OAV0RHLHIzD7oXLykObra3FRHCQi0ZZsW9FxIWWFiTliouLcTNK2G3dVUmI7M9JzXIVxoVK+irOCIzaHJmHV1NazYgGjMBUSsfJxxVqzqlWmJAIhZ0zhciK6ZJRBlqFkCrJOFyIhMVZoS8EEx8PhJOX1U5MjAzwWUjn9dvWS5vPJQfrNvkFRJvcHFNVbP/JnhyKCoBxPXRChltZFAIK5oBMxpHWCsdjKbVJSuaPT8em0MtRAHRjk5OEP+AIsWrKSgFZtO3BAHdMzIRqNHAFxlSfWIqWGhVda9SX1Q1WYBkcWUtS097LzOAUasBOREFR2Y5NSkxcxUCCmb/phcGJiENeTlJGgFVKQpDik1uWi9yZR0QClWAZcQaORIKZmbVIhQrdRQPJKOARAEaih8kqxumJizlQ1c6qVJzGjuzPztatDumXUmaKCgVdI/RIievOS4WGIABNhElLw8QtyLfMS23LhEhtwZiDyC3QSBJcxyAF4DNKAMJczPAEgbfVyUJcztNQBUvaDcs2gk2NYLiQFpGzSgpFxo5NjlwuAUpJqbVHiIahZh0CiCGSyAMM8D/oCszJxM13RpyIEn/HwlB6gIPAXZJWB8jQ2ZVN7pVOBUXbzvNLSXANyZGfElmASJiZj1HJSI1H/PARTxHJkl3HN4lRC2AIgEvC/WrPhETRpJVNz5GSw8JCUD/uHcQJSslmmSjVaABPwlciBxAIMlVVgYcBUD/GfgBOAgRhIn/N3SAOg8UUoc5GnkopDIfiZqFGSPaM2csg4N7HwaeVihAh5TgLbeAFhoRg/CaDgHRUwwNNsD/RC8cLRAVW0DeBwHFOBUnmzyKF2bVVRpVVYCAIJKrEgsHP5CrBAT2IxsKkq6rDBqAvlAjY7RQfjYtVX4vV7AzKRQgZUuAi3aSdIBVOCkPsOxVJQk+kiQTHqv/YRsURx4Rd3b/ERKKZSY8ijdGKxqOii09PtsBUbxAICkUdZeOFBWjcBMMPcOAMAQY";
@@ -51,6 +59,7 @@
   const B_HD_PRED = 8;
   const B_HU_PRED = 9;
 
+  // Public facade: accepts WebP bytes, decodes one VP8 key frame, and returns RGBA pixels.
   class PureJsWebpDecoder {
     async decodeUrl(url) {
       const response = await fetch(url);
@@ -94,6 +103,7 @@
     }
   }
 
+  // VP8 frame decoder: reads macroblock modes/residuals into YUV planes, then loop-filters them.
   class Vp8KeyFrameDecoder {
     constructor(frame) {
       this.frame = frame;
@@ -179,6 +189,7 @@
       };
     }
 
+    // Frame headers define segmentation, filtering, token partitions, quantizers, and probabilities.
     decodeFrameHeader(reader) {
       reader.readBool(128); // color space: only YUV is expected for WebP VP8.
       reader.readBool(128); // clamping type.
@@ -319,6 +330,7 @@
       return params;
     }
 
+    // Each macroblock combines prediction modes, optional residual tokens, and filter metadata.
     decodeMacroblock(modeReader, tokenReader, mbX, mbY, leftCoeffY, leftCoeffU, leftCoeffV, leftBModes, leftY2) {
       const segmentId = this.segment.updateMap
         ? readTree(modeReader, SEGMENT_TREE, this.segment.probs)
@@ -416,6 +428,7 @@
       }
     }
 
+    // Residual decoding reconstructs Y2, luma, and chroma coefficient blocks before inverse transforms.
     decodeMacroblockResiduals(reader, mbX, mbY, yMode, dequant, macroblock, leftY, leftU, leftV, leftY2) {
       const y2Dc = new Int16Array(16);
       let hasCoeff = false;
@@ -495,6 +508,7 @@
       return { leftY2, hasCoeff };
     }
 
+    // VP8 loop filtering smooths block edges after all macroblocks have been reconstructed.
     applyLoopFilter() {
       if (this.filter.level === 0) {
         return;
@@ -521,6 +535,7 @@
     }
   }
 
+  // Boolean arithmetic decoder used by VP8 mode and coefficient token streams.
   class BoolDecoder {
     constructor(bytes, start, end) {
       this.bytes = bytes;
@@ -569,6 +584,7 @@
     }
   }
 
+  // Container parsing extracts the lossy VP8 chunk and rejects unsupported WebP variants.
   function parseWebpContainer(arrayBuffer) {
     const bytes = arrayBuffer instanceof Uint8Array
       ? arrayBuffer
@@ -775,6 +791,7 @@
     return { coeffs, hasCoeff };
   }
 
+  // Inverse transforms turn quantized frequency coefficients back into spatial residuals.
   function inverseWalsh(input, output) {
     const temp = new Int32Array(16);
 
@@ -843,6 +860,7 @@
     return Math.floor((value * multiplier) / 65536);
   }
 
+  // Prediction fills blocks from already-decoded neighbors before residuals are added.
   function predictLuma(plane, stride, mbX, mbY, mode, bModes) {
     const x = mbX * 16;
     const y = mbY * 16;
@@ -1152,6 +1170,7 @@
     }
   }
 
+  // Final color conversion upsamples chroma and maps VP8 YUV samples into RGBA pixels.
   function convertYuvToRgba(decoded) {
     const output = new Uint8ClampedArray(decoded.width * decoded.height * 4);
     const uvWidth = Math.ceil(decoded.width / 2);
@@ -1220,6 +1239,7 @@
     }
   }
 
+  // Loop-filter helpers implement the simple and normal VP8 edge filters.
   function createFilterParam(baseLevel, modeIndex, filter) {
     let level = baseLevel;
 

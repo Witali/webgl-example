@@ -1,6 +1,15 @@
+/*
+ * Purpose: Thin adapter exposing the pure JavaScript WebP decoder through the
+ * same async interface used by the visual comparison page.
+ * Processing blocks:
+ * - Verify that WebP-dec.js has registered PureJsWebpDecoder.
+ * - Fetch image bytes for URL-based calls.
+ * - Delegate byte decoding to the pure JS implementation.
+ */
 (function (global) {
   "use strict";
 
+  // Adapter class keeps the pure JS WebP decoder compatible with async benchmark callers.
   class JsWebpDecoder {
     constructor(decoder) {
       this.decoder = decoder;

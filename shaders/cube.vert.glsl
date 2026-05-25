@@ -1,3 +1,10 @@
+/*
+ * Purpose: Vertex shader for the rotating textured cube demo.
+ * Processing blocks:
+ * - Transform object-space positions through model, view, and projection matrices.
+ * - Transform normals for lighting in the fragment shader.
+ * - Pass world position and texture coordinates to the fragment stage.
+ */
 attribute vec3 aPosition;
 attribute vec3 aNormal;
 attribute vec2 aTexCoord;

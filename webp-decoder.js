@@ -1,3 +1,10 @@
+/*
+ * Purpose: WASM/libwebp wrapper used as the reference WebP decoder in tests.
+ * Processing blocks:
+ * - Load the Emscripten factory and locate the bundled WebP WASM file.
+ * - Cache the async decode function after first initialization.
+ * - Normalize decoded ImageData into the same result shape as other decoders.
+ */
 (function (global) {
   "use strict";
 
@@ -6,6 +13,7 @@
 
   let decodePromise = null;
 
+  // Adapter class that presents the WASM WebP path like the other benchmark decoders.
   class WasmWebpDecoder {
     static async create() {
       return new WasmWebpDecoder();
@@ -42,6 +50,7 @@
     }
   }
 
+  // Lazy initialization avoids paying the libwebp WASM startup cost until WebP is selected.
   async function loadWebpDecode() {
     if (!decodePromise) {
       decodePromise = loadWebpModuleFactory()
@@ -77,6 +86,7 @@
     return decodePromise;
   }
 
+  // Load the generated Emscripten module as a temporary blob-backed ES module.
   async function loadWebpModuleFactory() {
     const response = await fetch(WEBP_DECODER_FACTORY_URL);
 
