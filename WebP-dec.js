@@ -15,7 +15,7 @@
 
   const Y_MODE_TREE = [-4, 2, 4, 6, 0, -1, -2, -3];
   const UV_MODE_TREE = [0, 2, -1, 4, -2, -3];
-  const SEGMENT_TREE = [0, 2, -1, 4, -2, -3];
+  const SEGMENT_TREE = [2, 4, 0, -1, -2, -3];
   const B_MODE_TREE = [
     0, 2, -1, 4, -2, 6, 8, 12, -3, 10, -5, -6, -4, 14, -7, 16, -8, -9,
   ];
@@ -115,9 +115,20 @@
         abs: false,
         probs: [255, 255, 255],
         quant: [0, 0, 0, 0],
+        filter: [0, 0, 0, 0],
+      };
+      this.filter = {
+        simple: false,
+        level: 0,
+        sharpness: 0,
+        useLfDelta: false,
+        refLfDelta: [0, 0, 0, 0],
+        modeLfDelta: [0, 0, 0, 0],
+        params: [],
       };
       this.quantHeader = null;
       this.dequants = null;
+      this.macroblockFilters = new Array(this.mbWidth * this.mbHeight);
       this.mbNoSkipCoeff = 0;
       this.probSkipFalse = 0;
       this.aboveY = new Uint8Array(this.mbWidth * 4);
@@ -155,6 +166,8 @@
         }
       }
 
+      this.applyLoopFilter();
+
       return {
         width: this.width,
         height: this.height,
@@ -176,25 +189,7 @@
         this.decodeSegmentationHeader(reader);
       }
 
-      reader.readBool(128); // filter type.
-      reader.readLiteral(6); // loop filter level.
-      reader.readLiteral(3); // sharpness.
-
-      if (reader.readBool(128)) {
-        if (reader.readBool(128)) {
-          for (let index = 0; index < 4; index += 1) {
-            if (reader.readBool(128)) {
-              readSignedMagnitude(reader, 6);
-            }
-          }
-
-          for (let index = 0; index < 4; index += 1) {
-            if (reader.readBool(128)) {
-              readSignedMagnitude(reader, 6);
-            }
-          }
-        }
-      }
+      this.decodeFilterHeader(reader);
 
       const logTokenPartitions = reader.readLiteral(2);
 
@@ -219,6 +214,7 @@
       }
 
       this.dequants = this.createDequantTables();
+      this.filter.params = this.createFilterParams();
     }
 
     decodeSegmentationHeader(reader) {
@@ -232,15 +228,30 @@
         }
 
         for (let index = 0; index < 4; index += 1) {
-          if (reader.readBool(128)) {
-            readSignedMagnitude(reader, 6);
-          }
+          this.segment.filter[index] = reader.readBool(128) ? readSignedMagnitude(reader, 6) : 0;
         }
       }
 
       if (this.segment.updateMap) {
         for (let index = 0; index < 3; index += 1) {
           this.segment.probs[index] = reader.readBool(128) ? reader.readLiteral(8) : 255;
+        }
+      }
+    }
+
+    decodeFilterHeader(reader) {
+      this.filter.simple = Boolean(reader.readBool(128));
+      this.filter.level = reader.readLiteral(6);
+      this.filter.sharpness = reader.readLiteral(3);
+      this.filter.useLfDelta = Boolean(reader.readBool(128));
+
+      if (this.filter.useLfDelta && reader.readBool(128)) {
+        for (let index = 0; index < 4; index += 1) {
+          this.filter.refLfDelta[index] = reader.readBool(128) ? readSignedMagnitude(reader, 6) : 0;
+        }
+
+        for (let index = 0; index < 4; index += 1) {
+          this.filter.modeLfDelta[index] = reader.readBool(128) ? readSignedMagnitude(reader, 6) : 0;
         }
       }
     }
@@ -283,6 +294,31 @@
       return tables;
     }
 
+    createFilterParams() {
+      const segmentCount = this.segment.enabled ? 4 : 1;
+      const params = [];
+
+      for (let segmentId = 0; segmentId < segmentCount; segmentId += 1) {
+        let baseLevel = this.filter.level;
+
+        if (this.segment.enabled) {
+          baseLevel = this.segment.filter[segmentId];
+
+          if (!this.segment.abs) {
+            baseLevel += this.filter.level;
+          }
+        }
+
+        params[segmentId] = [];
+
+        for (let modeIndex = 0; modeIndex < 2; modeIndex += 1) {
+          params[segmentId][modeIndex] = createFilterParam(baseLevel, modeIndex, this.filter);
+        }
+      }
+
+      return params;
+    }
+
     decodeMacroblock(modeReader, tokenReader, mbX, mbY, leftCoeffY, leftCoeffU, leftCoeffV, leftBModes, leftY2) {
       const segmentId = this.segment.updateMap
         ? readTree(modeReader, SEGMENT_TREE, this.segment.probs)
@@ -290,6 +326,7 @@
       const skipCoeff = this.mbNoSkipCoeff ? modeReader.readBool(this.probSkipFalse) : 0;
       const yMode = readTree(modeReader, Y_MODE_TREE, [145, 156, 163, 128]);
       const bModes = new Uint8Array(16);
+      let hasCoeff = false;
 
       if (yMode === B_PRED) {
         this.decodeSubblockModes(modeReader, mbX, mbY, bModes, leftBModes);
@@ -309,7 +346,7 @@
       predictChroma(this.v, this.uvStride, mbX, mbY, uvMode);
 
       if (!skipCoeff) {
-        leftY2 = this.decodeMacroblockResiduals(
+        const residuals = this.decodeMacroblockResiduals(
           tokenReader,
           mbX,
           mbY,
@@ -321,6 +358,8 @@
           leftCoeffV,
           leftY2
         );
+        leftY2 = residuals.leftY2;
+        hasCoeff = residuals.hasCoeff;
       } else {
         clearMacroblockContexts(mbX, leftCoeffY, leftCoeffU, leftCoeffV, this.aboveY, this.aboveU, this.aboveV);
         if (yMode !== B_PRED) {
@@ -339,7 +378,24 @@
       addChromaResiduals(this.v, this.uvStride, mbX, mbY, macroblock.v);
 
       updateBModeContexts(mbX, bModes, this.frame.aboveBModes, leftBModes);
+      this.macroblockFilters[mbY * this.mbWidth + mbX] = this.createMacroblockFilter(segmentId, yMode, hasCoeff);
       this.currentLeftY2 = leftY2;
+    }
+
+    createMacroblockFilter(segmentId, yMode, hasCoeff) {
+      const modeIndex = yMode === B_PRED ? 1 : 0;
+      const base = (this.filter.params[segmentId] || this.filter.params[0] || [])[modeIndex];
+
+      if (!base) {
+        return null;
+      }
+
+      return {
+        level: base.level,
+        ilevel: base.ilevel,
+        hlevel: base.hlevel,
+        inner: base.inner || hasCoeff,
+      };
     }
 
     decodeSubblockModes(reader, mbX, mbY, bModes, leftBModes) {
@@ -362,6 +418,7 @@
 
     decodeMacroblockResiduals(reader, mbX, mbY, yMode, dequant, macroblock, leftY, leftU, leftV, leftY2) {
       const y2Dc = new Int16Array(16);
+      let hasCoeff = false;
 
       if (yMode !== B_PRED) {
         const y2Coeffs = decodeCoeffBlock({
@@ -377,6 +434,7 @@
         inverseWalsh(y2Coeffs.coeffs, y2Dc);
         leftY2 = y2Coeffs.hasCoeff ? 1 : 0;
         this.aboveY2[mbX] = leftY2;
+        hasCoeff = hasCoeff || y2Coeffs.hasCoeff;
       }
 
       for (let index = 0; index < 16; index += 1) {
@@ -397,6 +455,7 @@
         }
 
         inverseDct(decoded.coeffs, macroblock.y[index]);
+        hasCoeff = hasCoeff || decoded.hasCoeff;
       }
 
       for (let index = 0; index < 4; index += 1) {
@@ -413,6 +472,7 @@
         });
 
         inverseDct(decodedU.coeffs, macroblock.u[index]);
+        hasCoeff = hasCoeff || decodedU.hasCoeff;
       }
 
       for (let index = 0; index < 4; index += 1) {
@@ -429,9 +489,35 @@
         });
 
         inverseDct(decodedV.coeffs, macroblock.v[index]);
+        hasCoeff = hasCoeff || decodedV.hasCoeff;
       }
 
-      return leftY2;
+      return { leftY2, hasCoeff };
+    }
+
+    applyLoopFilter() {
+      if (this.filter.level === 0) {
+        return;
+      }
+
+      for (let mbY = 0; mbY < this.mbHeight; mbY += 1) {
+        for (let mbX = 0; mbX < this.mbWidth; mbX += 1) {
+          const filter = this.macroblockFilters[mbY * this.mbWidth + mbX];
+
+          if (!filter || filter.level === 0) {
+            continue;
+          }
+
+          const yIndex = mbY * this.yStride * 16 + mbX * 16;
+          const cIndex = mbY * this.uvStride * 8 + mbX * 8;
+
+          if (this.filter.simple) {
+            applySimpleLoopFilter(this.y, this.yStride, yIndex, mbX, mbY, filter);
+          } else {
+            applyNormalLoopFilter(this.y, this.u, this.v, this.yStride, this.uvStride, yIndex, cIndex, mbX, mbY, filter);
+          }
+        }
+      }
     }
   }
 
@@ -720,20 +806,16 @@
 
   function inverseDct(input, output) {
     const temp = new Int32Array(16);
-    const cospi8sqrt2minus1 = 20091;
+    const cospi8sqrt2 = 85627;
     const sinpi8sqrt2 = 35468;
 
     for (let column = 0; column < 4; column += 1) {
       const a1 = input[column] + input[column + 8];
       const b1 = input[column] - input[column + 8];
-      let temp1 = (input[column + 4] * sinpi8sqrt2) >> 16;
-      let temp2 = input[column + 12] + ((input[column + 12] * cospi8sqrt2minus1) >> 16);
-      const c1 = temp1 - temp2;
-
-      temp1 = input[column + 4] + ((input[column + 4] * cospi8sqrt2minus1) >> 16);
-      temp2 = (input[column + 12] * sinpi8sqrt2) >> 16;
-
-      const d1 = temp1 + temp2;
+      const c1 = mulShift16(input[column + 4], sinpi8sqrt2)
+        - mulShift16(input[column + 12], cospi8sqrt2);
+      const d1 = mulShift16(input[column + 4], cospi8sqrt2)
+        + mulShift16(input[column + 12], sinpi8sqrt2);
 
       temp[column] = a1 + d1;
       temp[column + 12] = a1 - d1;
@@ -745,20 +827,20 @@
       const offset = row * 4;
       const a1 = temp[offset] + temp[offset + 2];
       const b1 = temp[offset] - temp[offset + 2];
-      let temp1 = (temp[offset + 1] * sinpi8sqrt2) >> 16;
-      let temp2 = temp[offset + 3] + ((temp[offset + 3] * cospi8sqrt2minus1) >> 16);
-      const c1 = temp1 - temp2;
-
-      temp1 = temp[offset + 1] + ((temp[offset + 1] * cospi8sqrt2minus1) >> 16);
-      temp2 = (temp[offset + 3] * sinpi8sqrt2) >> 16;
-
-      const d1 = temp1 + temp2;
+      const c1 = mulShift16(temp[offset + 1], sinpi8sqrt2)
+        - mulShift16(temp[offset + 3], cospi8sqrt2);
+      const d1 = mulShift16(temp[offset + 1], cospi8sqrt2)
+        + mulShift16(temp[offset + 3], sinpi8sqrt2);
 
       output[offset] = (a1 + d1 + 4) >> 3;
       output[offset + 3] = (a1 - d1 + 4) >> 3;
       output[offset + 1] = (b1 + c1 + 4) >> 3;
       output[offset + 2] = (b1 - c1 + 4) >> 3;
     }
+  }
+
+  function mulShift16(value, multiplier) {
+    return Math.floor((value * multiplier) / 65536);
   }
 
   function predictLuma(plane, stride, mbX, mbY, mode, bModes) {
@@ -796,7 +878,7 @@
       left[index] = hasLeft ? plane[(y + index) * stride + x - 1] : 129;
     }
 
-    const topLeft = hasTop && hasLeft ? plane[y * stride - stride + x - 1] : 127;
+    const topLeft = hasTop ? (hasLeft ? plane[y * stride - stride + x - 1] : 129) : 127;
     let dc = 128;
 
     if (mode === DC_PRED) {
@@ -831,32 +913,24 @@
   function predictSubblock(plane, stride, x, y, mode) {
     const A = new Array(9);
     const L = new Array(4);
-    const E = new Array(9);
     const block = new Array(16);
     const hasTop = y > 0;
     const hasLeft = x > 0;
+    const mbBaseX = Math.floor(x / 16) * 16;
+    const mbBaseY = Math.floor(y / 16) * 16;
+    const blockXInMb = (x - mbBaseX) >> 2;
 
-    A[-1] = hasTop && hasLeft ? plane[(y - 1) * stride + x - 1] : 127;
+    A[-1] = hasTop ? (hasLeft ? plane[(y - 1) * stride + x - 1] : 129) : 127;
 
     for (let index = 0; index < 8; index += 1) {
-      A[index] = hasTop ? plane[(y - 1) * stride + Math.min(x + index, stride - 1)] : 127;
+      A[index] = readSubblockAbovePixel(plane, stride, x, y, mbBaseX, mbBaseY, blockXInMb, index);
     }
 
     for (let index = 0; index < 4; index += 1) {
       L[index] = hasLeft ? plane[(y + index) * stride + x - 1] : 129;
     }
 
-    E[0] = L[3];
-    E[1] = L[2];
-    E[2] = L[1];
-    E[3] = L[0];
-    E[4] = A[-1];
-    E[5] = A[0];
-    E[6] = A[1];
-    E[7] = A[2];
-    E[8] = A[3];
-
-    fillSubblockPrediction(block, mode, A, L, E);
+    fillSubblockPrediction(block, mode, A, L);
 
     for (let row = 0; row < 4; row += 1) {
       const offset = (y + row) * stride + x;
@@ -867,10 +941,38 @@
     }
   }
 
-  function fillSubblockPrediction(B, mode, A, L, E) {
+  function readSubblockAbovePixel(plane, stride, x, y, mbBaseX, mbBaseY, blockXInMb, index) {
+    if (y === 0) {
+      return 127;
+    }
+
+    if (blockXInMb === 3 && index >= 4) {
+      const row = mbBaseY - 1;
+      const column = mbBaseX + 16 + index - 4;
+
+      if (row < 0) {
+        return 127;
+      }
+
+      return plane[row * stride + Math.min(column, stride - 1)];
+    }
+
+    return plane[(y - 1) * stride + Math.min(x + index, stride - 1)];
+  }
+
+  function fillSubblockPrediction(B, mode, A, L) {
     const set = (row, column, value) => {
       B[row * 4 + column] = value;
     };
+    const X = A[-1];
+    const A0 = A[0];
+    const A1 = A[1];
+    const A2 = A[2];
+    const A3 = A[3];
+    const L0 = L[0];
+    const L1 = L[1];
+    const L2 = L[2];
+    const L3 = L[3];
 
     if (mode === B_DC_PRED) {
       const value = (A[0] + A[1] + A[2] + A[3] + L[0] + L[1] + L[2] + L[3] + 4) >> 3;
@@ -925,27 +1027,42 @@
     }
 
     if (mode === B_RD_PRED) {
-      set(3, 0, avg3(E[0], E[1], E[2]));
-      set(3, 1, avg3(E[1], E[2], E[3])); set(2, 0, B[13]);
-      set(3, 2, avg3(E[2], E[3], E[4])); set(2, 1, B[14]); set(1, 0, B[14]);
-      set(3, 3, avg3(E[3], E[4], E[5])); set(2, 2, B[15]); set(1, 1, B[15]); set(0, 0, B[15]);
-      set(2, 3, avg3(E[4], E[5], E[6])); set(1, 2, B[11]); set(0, 1, B[11]);
-      set(1, 3, avg3(E[5], E[6], E[7])); set(0, 2, B[7]);
-      set(0, 3, avg3(E[6], E[7], E[8]));
+      set(0, 0, avg3(A0, X, L0));
+      set(0, 1, avg3(X, A0, A1));
+      set(0, 2, avg3(A0, A1, A2));
+      set(0, 3, avg3(A1, A2, A3));
+      set(1, 0, avg3(L1, L0, X));
+      set(1, 1, B[0]);
+      set(1, 2, B[1]);
+      set(1, 3, B[2]);
+      set(2, 0, avg3(L2, L1, L0));
+      set(2, 1, B[4]);
+      set(2, 2, B[5]);
+      set(2, 3, B[6]);
+      set(3, 0, avg3(L3, L2, L1));
+      set(3, 1, B[8]);
+      set(3, 2, B[9]);
+      set(3, 3, B[10]);
       return;
     }
 
     if (mode === B_VR_PRED) {
-      set(3, 0, avg3(E[1], E[2], E[3]));
-      set(2, 0, avg3(E[2], E[3], E[4]));
-      set(3, 1, avg3(E[3], E[4], E[5])); set(1, 0, B[13]);
-      set(2, 1, avg2(E[4], E[5])); set(0, 0, B[9]);
-      set(3, 2, avg3(E[4], E[5], E[6])); set(1, 1, B[14]);
-      set(2, 2, avg2(E[5], E[6])); set(0, 1, B[10]);
-      set(3, 3, avg3(E[5], E[6], E[7])); set(1, 2, B[15]);
-      set(2, 3, avg2(E[6], E[7])); set(0, 2, B[11]);
-      set(1, 3, avg3(E[6], E[7], E[8]));
-      set(0, 3, avg2(E[7], E[8]));
+      set(0, 0, avg2(X, A0));
+      set(0, 1, avg2(A0, A1));
+      set(0, 2, avg2(A1, A2));
+      set(0, 3, avg2(A2, A3));
+      set(1, 0, avg3(L0, X, A0));
+      set(1, 1, avg3(X, A0, A1));
+      set(1, 2, avg3(A0, A1, A2));
+      set(1, 3, avg3(A1, A2, A3));
+      set(2, 0, avg3(X, L0, L1));
+      set(2, 1, B[0]);
+      set(2, 2, B[1]);
+      set(2, 3, B[2]);
+      set(3, 0, avg3(L2, L1, L0));
+      set(3, 1, B[4]);
+      set(3, 2, B[5]);
+      set(3, 3, B[6]);
       return;
     }
 
@@ -964,16 +1081,22 @@
     }
 
     if (mode === B_HD_PRED) {
-      set(3, 0, avg2(E[0], E[1]));
-      set(3, 1, avg3(E[0], E[1], E[2]));
-      set(2, 0, avg2(E[1], E[2])); set(3, 2, B[8]);
-      set(2, 1, avg3(E[1], E[2], E[3])); set(3, 3, B[9]);
-      set(2, 2, avg2(E[2], E[3])); set(1, 0, B[10]);
-      set(2, 3, avg3(E[2], E[3], E[4])); set(1, 1, B[11]);
-      set(1, 2, avg2(E[3], E[4])); set(0, 0, B[6]);
-      set(1, 3, avg3(E[3], E[4], E[5])); set(0, 1, B[7]);
-      set(0, 2, avg3(E[4], E[5], E[6]));
-      set(0, 3, avg3(E[5], E[6], E[7]));
+      set(0, 0, avg2(X, L0));
+      set(0, 1, avg3(L0, X, A0));
+      set(0, 2, avg3(X, A0, A1));
+      set(0, 3, avg3(A0, A1, A2));
+      set(1, 0, avg2(L0, L1));
+      set(1, 1, avg3(X, L0, L1));
+      set(1, 2, B[0]);
+      set(1, 3, B[1]);
+      set(2, 0, avg2(L1, L2));
+      set(2, 1, avg3(L0, L1, L2));
+      set(2, 2, B[4]);
+      set(2, 3, B[5]);
+      set(3, 0, avg2(L2, L3));
+      set(3, 1, avg3(L1, L2, L3));
+      set(3, 2, B[8]);
+      set(3, 3, B[9]);
       return;
     }
 
@@ -1031,16 +1154,17 @@
 
   function convertYuvToRgba(decoded) {
     const output = new Uint8ClampedArray(decoded.width * decoded.height * 4);
+    const uvWidth = Math.ceil(decoded.width / 2);
+    const uvHeight = Math.ceil(decoded.height / 2);
     let out = 0;
 
     for (let y = 0; y < decoded.height; y += 1) {
       const yOffset = y * decoded.yStride;
-      const uvOffset = (y >> 1) * decoded.uvStride;
 
       for (let x = 0; x < decoded.width; x += 1) {
         const yy = decoded.y[yOffset + x];
-        const u = decoded.u[uvOffset + (x >> 1)] - 128;
-        const v = decoded.v[uvOffset + (x >> 1)] - 128;
+        const u = sampleChroma(decoded.u, decoded.uvStride, uvWidth, uvHeight, x, y) - 128;
+        const v = sampleChroma(decoded.v, decoded.uvStride, uvWidth, uvHeight, x, y) - 128;
 
         output[out++] = clampByte(1.164383 * (yy - 16) + 1.596027 * v);
         output[out++] = clampByte(1.164383 * (yy - 16) - 0.391762 * u - 0.812968 * v);
@@ -1050,6 +1174,26 @@
     }
 
     return output;
+  }
+
+  function sampleChroma(plane, stride, width, height, x, y) {
+    const fx = x / 2 - 0.25;
+    const fy = y / 2 - 0.25;
+    const x0 = clampInt(Math.floor(fx), 0, width - 1);
+    const y0 = clampInt(Math.floor(fy), 0, height - 1);
+    const x1 = clampInt(x0 + 1, 0, width - 1);
+    const y1 = clampInt(y0 + 1, 0, height - 1);
+    const tx = clampNumber(fx - x0, 0, 1);
+    const ty = clampNumber(fy - y0, 0, 1);
+    const a = plane[y0 * stride + x0];
+    const b = plane[y0 * stride + x1];
+    const c = plane[y1 * stride + x0];
+    const d = plane[y1 * stride + x1];
+
+    return a * (1 - tx) * (1 - ty)
+      + b * tx * (1 - ty)
+      + c * (1 - tx) * ty
+      + d * tx * ty;
   }
 
   function createEmptyMacroblock() {
@@ -1073,6 +1217,173 @@
     for (let index = 0; index < 4; index += 1) {
       aboveBModes[mbX * 4 + index] = bModes[12 + index];
       leftBModes[index] = bModes[index * 4 + 3];
+    }
+  }
+
+  function createFilterParam(baseLevel, modeIndex, filter) {
+    let level = baseLevel;
+
+    if (filter.useLfDelta) {
+      level += filter.refLfDelta[0];
+
+      if (modeIndex !== 0) {
+        level += filter.modeLfDelta[0];
+      }
+    }
+
+    if (level <= 0) {
+      return { level: 0, ilevel: 0, hlevel: 0, inner: modeIndex !== 0 };
+    }
+
+    level = Math.min(level, 63);
+
+    let innerLevel = level;
+
+    if (filter.sharpness > 0) {
+      innerLevel >>= filter.sharpness > 4 ? 2 : 1;
+      innerLevel = Math.min(innerLevel, 9 - filter.sharpness);
+    }
+
+    innerLevel = Math.max(innerLevel, 1);
+
+    return {
+      level: 2 * level + innerLevel,
+      ilevel: innerLevel,
+      hlevel: level < 15 ? 0 : level < 40 ? 1 : 2,
+      inner: modeIndex !== 0,
+    };
+  }
+
+  function applySimpleLoopFilter(y, stride, yIndex, mbX, mbY, filter) {
+    const level = filter.level;
+
+    if (mbX > 0) {
+      filter2(y, level + 4, yIndex, stride, 1, 16);
+    }
+
+    if (filter.inner) {
+      filter2(y, level, yIndex + 4, stride, 1, 16);
+      filter2(y, level, yIndex + 8, stride, 1, 16);
+      filter2(y, level, yIndex + 12, stride, 1, 16);
+    }
+
+    if (mbY > 0) {
+      filter2(y, level + 4, yIndex, 1, stride, 16);
+    }
+
+    if (filter.inner) {
+      filter2(y, level, yIndex + stride * 4, 1, stride, 16);
+      filter2(y, level, yIndex + stride * 8, 1, stride, 16);
+      filter2(y, level, yIndex + stride * 12, 1, stride, 16);
+    }
+  }
+
+  function applyNormalLoopFilter(y, u, v, yStride, uvStride, yIndex, cIndex, mbX, mbY, filter) {
+    const level = filter.level;
+    const innerLevel = filter.ilevel;
+    const highEdgeVarianceLevel = filter.hlevel;
+
+    if (mbX > 0) {
+      filter246(y, 16, level + 4, innerLevel, highEdgeVarianceLevel, yIndex, yStride, 1, false);
+      filter246(u, 8, level + 4, innerLevel, highEdgeVarianceLevel, cIndex, uvStride, 1, false);
+      filter246(v, 8, level + 4, innerLevel, highEdgeVarianceLevel, cIndex, uvStride, 1, false);
+    }
+
+    if (filter.inner) {
+      filter246(y, 16, level, innerLevel, highEdgeVarianceLevel, yIndex + 4, yStride, 1, true);
+      filter246(y, 16, level, innerLevel, highEdgeVarianceLevel, yIndex + 8, yStride, 1, true);
+      filter246(y, 16, level, innerLevel, highEdgeVarianceLevel, yIndex + 12, yStride, 1, true);
+      filter246(u, 8, level, innerLevel, highEdgeVarianceLevel, cIndex + 4, uvStride, 1, true);
+      filter246(v, 8, level, innerLevel, highEdgeVarianceLevel, cIndex + 4, uvStride, 1, true);
+    }
+
+    if (mbY > 0) {
+      filter246(y, 16, level + 4, innerLevel, highEdgeVarianceLevel, yIndex, 1, yStride, false);
+      filter246(u, 8, level + 4, innerLevel, highEdgeVarianceLevel, cIndex, 1, uvStride, false);
+      filter246(v, 8, level + 4, innerLevel, highEdgeVarianceLevel, cIndex, 1, uvStride, false);
+    }
+
+    if (filter.inner) {
+      filter246(y, 16, level, innerLevel, highEdgeVarianceLevel, yIndex + yStride * 4, 1, yStride, true);
+      filter246(y, 16, level, innerLevel, highEdgeVarianceLevel, yIndex + yStride * 8, 1, yStride, true);
+      filter246(y, 16, level, innerLevel, highEdgeVarianceLevel, yIndex + yStride * 12, 1, yStride, true);
+      filter246(u, 8, level, innerLevel, highEdgeVarianceLevel, cIndex + uvStride * 4, 1, uvStride, true);
+      filter246(v, 8, level, innerLevel, highEdgeVarianceLevel, cIndex + uvStride * 4, 1, uvStride, true);
+    }
+  }
+
+  function filter2(pixels, level, index, iStep, jStep, count) {
+    for (let n = 0; n < count; n += 1, index += iStep) {
+      const p1 = pixels[index - 2 * jStep];
+      const p0 = pixels[index - jStep];
+      const q0 = pixels[index];
+      const q1 = pixels[index + jStep];
+
+      if (Math.abs(p0 - q0) * 2 + (Math.abs(p1 - q1) >> 1) > level) {
+        continue;
+      }
+
+      const a = 3 * (q0 - p0) + clamp127(p1 - q1);
+      const a1 = clamp15((a + 4) >> 3);
+      const a2 = clamp15((a + 3) >> 3);
+      pixels[index - jStep] = clamp255(p0 + a2);
+      pixels[index] = clamp255(q0 - a1);
+    }
+  }
+
+  function filter246(pixels, count, level, innerLevel, highEdgeVarianceLevel, index, iStep, jStep, fourNotSix) {
+    for (let n = 0; n < count; n += 1, index += iStep) {
+      const p3 = pixels[index - 4 * jStep];
+      const p2 = pixels[index - 3 * jStep];
+      const p1 = pixels[index - 2 * jStep];
+      const p0 = pixels[index - jStep];
+      const q0 = pixels[index];
+      const q1 = pixels[index + jStep];
+      const q2 = pixels[index + 2 * jStep];
+      const q3 = pixels[index + 3 * jStep];
+
+      if (Math.abs(p0 - q0) * 2 + (Math.abs(p1 - q1) >> 1) > level) {
+        continue;
+      }
+
+      if (
+        Math.abs(p3 - p2) > innerLevel ||
+        Math.abs(p2 - p1) > innerLevel ||
+        Math.abs(p1 - p0) > innerLevel ||
+        Math.abs(q1 - q0) > innerLevel ||
+        Math.abs(q2 - q1) > innerLevel ||
+        Math.abs(q3 - q2) > innerLevel
+      ) {
+        continue;
+      }
+
+      if (Math.abs(p1 - p0) > highEdgeVarianceLevel || Math.abs(q1 - q0) > highEdgeVarianceLevel) {
+        const a = 3 * (q0 - p0) + clamp127(p1 - q1);
+        const a1 = clamp15((a + 4) >> 3);
+        const a2 = clamp15((a + 3) >> 3);
+        pixels[index - jStep] = clamp255(p0 + a2);
+        pixels[index] = clamp255(q0 - a1);
+      } else if (fourNotSix) {
+        const a = 3 * (q0 - p0);
+        const a1 = clamp15((a + 4) >> 3);
+        const a2 = clamp15((a + 3) >> 3);
+        const a3 = (a1 + 1) >> 1;
+        pixels[index - 2 * jStep] = clamp255(p1 + a3);
+        pixels[index - jStep] = clamp255(p0 + a2);
+        pixels[index] = clamp255(q0 - a1);
+        pixels[index + jStep] = clamp255(q1 - a3);
+      } else {
+        const a = clamp127(3 * (q0 - p0) + clamp127(p1 - q1));
+        const a1 = (27 * a + 63) >> 7;
+        const a2 = (18 * a + 63) >> 7;
+        const a3 = (9 * a + 63) >> 7;
+        pixels[index - 3 * jStep] = clamp255(p2 + a3);
+        pixels[index - 2 * jStep] = clamp255(p1 + a2);
+        pixels[index - jStep] = clamp255(p0 + a1);
+        pixels[index] = clamp255(q0 - a1);
+        pixels[index + jStep] = clamp255(q1 - a2);
+        pixels[index + 2 * jStep] = clamp255(q2 - a3);
+      }
     }
   }
 
@@ -1165,6 +1476,14 @@
     return value < 0 ? 0 : value > 127 ? 127 : value;
   }
 
+  function clampInt(value, min, max) {
+    return value < min ? min : value > max ? max : value;
+  }
+
+  function clampNumber(value, min, max) {
+    return value < min ? min : value > max ? max : value;
+  }
+
   function avg2(a, b) {
     return (a + b + 1) >> 1;
   }
@@ -1185,6 +1504,18 @@
 
   function clampByte(value) {
     return value < 0 ? 0 : value > 255 ? 255 : value + 0.5 | 0;
+  }
+
+  function clamp15(value) {
+    return value < -16 ? -16 : value > 15 ? 15 : value;
+  }
+
+  function clamp127(value) {
+    return value < -128 ? -128 : value > 127 ? 127 : value;
+  }
+
+  function clamp255(value) {
+    return value < 0 ? 0 : value > 255 ? 255 : value;
   }
 
   function readFourCc(bytes, offset) {
