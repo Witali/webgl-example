@@ -370,6 +370,7 @@ function contentType(filePath) {
     case ".css":
       return "text/css; charset=utf-8";
     case ".glsl":
+    case ".wgsl":
       return "text/plain; charset=utf-8";
     case ".jpg":
     case ".jpeg":

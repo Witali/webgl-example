@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Browser Capabilities</title>
+    <link rel="stylesheet" href="./browser-specs.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <a class="back-link" href="./index.html">Home</a>
+          <h1>Browser Capabilities</h1>
+        </div>
+        <button id="refresh-button" type="button">Refresh</button>
+      </header>
+
+      <section id="status" role="status">Ready</section>
+
+      <section id="overview" class="summary-grid" aria-label="capability overview"></section>
+
+      <section class="panel" aria-labelledby="browser-heading">
+        <h2 id="browser-heading">Browser Runtime</h2>
+        <div id="browser-details"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="webgpu-heading">
+        <h2 id="webgpu-heading">WebGPU</h2>
+        <div id="webgpu-details"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="webgl-heading">
+        <h2 id="webgl-heading">WebGL</h2>
+        <div id="webgl-details"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="wasm-heading">
+        <h2 id="wasm-heading">WebAssembly</h2>
+        <div id="wasm-details"></div>
+      </section>
+    </main>
+
+    <script src="./browser-specs.js"></script>
+  </body>
+</html>

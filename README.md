@@ -7,17 +7,18 @@ decoder, upload support, diff contrast controls, and benchmark pages with
 readable timing tables.
 
 This project renders a textured rotating cube and includes a small standalone
-GPU-assisted JPEG decoder in `gpu-jpeg.js`, a pure JavaScript lossy WebP/VP8
-decoder in `WebP-dec.js`, and a WASM/libwebp WebP decoder wrapper in
-`webp-decoder.js`.
+GPU-assisted JPEG decoder in `gpu-jpeg.js`, a WebGPU/WGSL JPEG reconstruction
+variant in `webgpu-wgsl-jpeg.js`, a pure JavaScript lossy WebP/VP8 decoder in
+`WebP-dec.js`, and a WASM/libwebp WebP decoder wrapper in `webp-decoder.js`.
 
 Open `index.html` through a local server to choose between:
 
 - `cube.html` for the textured rotating cube
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
-- `benchmarks.html` for native browser, WASM, WASM+GPU, GPU, optional WebGPU
-  resident, and WebP decode timings
+- `benchmarks.html` for native browser, WASM, WASM+GPU, GPU, WebGPU WGSL,
+  optional WebGPU resident, and WebP decode timings
+- `browser-specs.html` for WebGPU, WebGL, and WebAssembly capability checks
 
 ## `GpuJpegDecoder`
 
@@ -98,6 +99,18 @@ three components and no restart interval. Progressive JPEGs, restart markers,
 CMYK/YCCK, arithmetic coding, and multi-scan baseline JPEGs are still handled by
 the existing CPU/WASM/GPU-assisted paths instead.
 
+## `WebGpuWgslJpegDecoder`
+
+`webgpu-wgsl-jpeg.js` is a WebGPU compute-shader sibling of the WebGL
+`GpuJpegDecoder` path. It reuses `GpuJpegDecoder.parse()` for JPEG markers,
+Huffman entropy decoding, progressive scan handling, and dequantization, then
+uploads component coefficient buffers to `shaders/jpeg-idct-compute.wgsl`.
+
+The WGSL shader runs direct 8x8 IDCT, center-aligned chroma upsampling, grayscale
+or YCbCr-to-RGBA conversion, and writes packed pixels to a storage buffer. This
+keeps the compatibility profile close to the CPU-parsed WebGL path while moving
+the reconstruction step from a WebGL fragment shader into a WebGPU compute pass.
+
 ## Limits
 
 Baseline and progressive Huffman JPEGs are supported. Arithmetic-coded JPEG,
@@ -170,10 +183,10 @@ http://127.0.0.1:8000/tests/visual-jpeg-compare.html
 
 The page shows the browser-decoded image, the library-decoded image, and an
 amplified diff map. Use the decoder selector to switch between `GPU`, `WebGPU
-resident`, `WASM`, `WASM+GPU`, and `WASM WebP`. The upload input accepts JPEG
-and WebP files. The built-in image list includes a WebP copy of the first stone
-texture plus WebP copies of the public-domain landscape fixtures; choosing a
-WebP asset automatically switches the decoder to `WASM WebP`.
+WGSL`, `WebGPU resident`, `WASM`, `WASM+GPU`, and WebP paths. The upload input
+accepts JPEG and WebP files. The built-in image list includes a WebP copy of the
+first stone texture plus WebP copies of the public-domain landscape fixtures;
+choosing a WebP asset automatically switches the decoder to a WebP path.
 
 Latest visual comparison results:
 
@@ -248,15 +261,14 @@ as the main `Work total` metric. Setup/upload and readback are shown separately
 and are not included in the reference speedups. The native path measures only the
 `createImageBitmap()` decode API around a prebuilt `Blob`. The WASM JPEG path
 uses JPEG entropy parse plus WASM IDCT/color conversion as clean work and reports
-copying coefficient blocks into WASM memory as setup. The WASM+GPU and GPU paths
-use JPEG entropy parse plus the GPU shader draw as clean work; texture creation,
-coefficient atlas packing, texture upload, and optional `GPU_READBACK=1` output
-readback stay in separate columns. The result page uses both native browser
-decode and WASM decode as reference columns in the speedup table. The JPEG
-benchmark also tries the experimental WebGPU-resident decoder by default. If
-WebGPU is unavailable, or if a JPEG falls outside that decoder's current SOF0
-baseline subset, the row stays visible and reports skipped images instead of
-failing the whole run.
+copying coefficient blocks into WASM memory as setup. The WASM+GPU, GPU, and
+WebGPU WGSL paths use JPEG entropy parse plus GPU reconstruction as clean work;
+texture or storage-buffer setup, upload, and readback stay in separate columns.
+The result page uses both native browser decode and WASM decode as reference
+columns in the speedup table. The JPEG benchmark also tries the experimental
+WebGPU-resident decoder by default. If WebGPU is unavailable, or if a JPEG falls
+outside that decoder's current SOF0 baseline subset, the row stays visible and
+reports skipped images instead of failing the whole run.
 
 To force-enable WebGPU in the browser runner, set the browser feature flag:
 
@@ -265,9 +277,9 @@ $env:BROWSER_ENABLE_WEBGPU='1'
 node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm/jpeg-idct.wasm
 ```
 
-To disable the WebGPU-resident row, set `$env:WEBGPU_JPEG='0'`.
+To disable the WebGPU rows, set `$env:WEBGPU_JPEG='0'`.
 
-For this decoder, benchmark timings use `gpuDecodeMs`, so upload/setup and
+For these decoders, benchmark timings use `gpuDecodeMs`, so upload/setup and
 `readPixels()` readback are reported separately and do not count as clean work
 time.
 

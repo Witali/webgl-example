@@ -60,8 +60,10 @@ async function runBenchmark() {
   const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
   const webGpuState = await createWebGpuState();
   const webGpuPrescanState = await createWebGpuState({ entropyMode: "prescan" });
+  const webGpuWgslState = await createWebGpuWgslState();
   const webGpuDecoder = webGpuState.decoder;
   const webGpuPrescanDecoder = webGpuPrescanState.decoder;
+  const webGpuWgslDecoder = webGpuWgslState.decoder;
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
 
   writeStatus(`warming native browser JPEG decoder (${warmupImages.length})`);
@@ -92,6 +94,11 @@ async function runBenchmark() {
     });
   }
 
+  if (webGpuWgslDecoder) {
+    writeStatus(`warming CPU-JS-Huff+WebGPU-WGSL-IDCT JPEG decoder (${warmupImages.length})`);
+    await runAsyncPixelDecode(webGpuWgslDecoder, warmupImages, { collectTimings: false });
+  }
+
   writeStatus(`warming CPU-JS-Huff+GPU-IDCT JPEG decoder (${warmupImages.length})`);
   runGpuDecode(gl, gpuDecoder, warmupImages, {
     collectTimings: false,
@@ -112,6 +119,7 @@ async function runBenchmark() {
 
   let webGpuDecode = null;
   let webGpuPrescanDecode = null;
+  let webGpuWgslDecode = null;
 
   if (webGpuDecoder) {
     writeStatus(`benchmarking GPU-Huff+GPU-IDCT resident JPEG decoder (${loadedImages.length})`);
@@ -131,6 +139,15 @@ async function runBenchmark() {
     });
   } else if (includeWebGpu) {
     webGpuPrescanDecode = createSkippedSummary(webGpuPrescanState.status, loadedImages.length);
+  }
+
+  if (webGpuWgslDecoder) {
+    writeStatus(`benchmarking CPU-JS-Huff+WebGPU-WGSL-IDCT JPEG decoder (${loadedImages.length})`);
+    webGpuWgslDecode = await runAsyncPixelDecode(webGpuWgslDecoder, loadedImages, {
+      collectTimings: true,
+    });
+  } else if (includeWebGpu) {
+    webGpuWgslDecode = createSkippedSummary(webGpuWgslState.status, loadedImages.length);
   }
 
   writeStatus(`benchmarking CPU-JS-Huff+GPU-IDCT JPEG decoder (${loadedImages.length})`);
@@ -157,6 +174,7 @@ async function runBenchmark() {
       webGpuMode,
       webGpuStatus: webGpuState.status,
       webGpuPrescanStatus: webGpuPrescanState.status,
+      webGpuWgslStatus: webGpuWgslState.status,
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
@@ -164,6 +182,7 @@ async function runBenchmark() {
     wasmGpuDecode,
     webGpuDecode,
     webGpuPrescanDecode,
+    webGpuWgslDecode,
     gpuDecode,
     environment: {
       renderer: gl.getParameter(gl.RENDERER),
@@ -312,6 +331,34 @@ async function createWebGpuState(options) {
   try {
     return {
       decoder: await WebGpuJpegDecoder.create(options),
+      status: "enabled",
+    };
+  } catch (error) {
+    return {
+      decoder: null,
+      status: error && error.message ? error.message : String(error),
+    };
+  }
+}
+
+async function createWebGpuWgslState() {
+  if (!includeWebGpu) {
+    return {
+      decoder: null,
+      status: "disabled",
+    };
+  }
+
+  if (!globalThis.navigator || !globalThis.navigator.gpu) {
+    return {
+      decoder: null,
+      status: "navigator.gpu is not available",
+    };
+  }
+
+  try {
+    return {
+      decoder: await WebGpuWgslJpegDecoder.create(),
       status: "enabled",
     };
   } catch (error) {
@@ -866,6 +913,7 @@ function getTimingRows(result) {
     ["wasmGpuDecode", "CPU-WASM+GPU-IDCT"],
     ["webGpuDecode", "GPU-Huff+GPU-IDCT resident"],
     ["webGpuPrescanDecode", "CPU-JS-Prescan+GPU-Huff+GPU-IDCT"],
+    ["webGpuWgslDecode", "CPU-JS-Huff+WebGPU-WGSL-IDCT"],
     ["gpuDecode", "CPU-JS-Huff+GPU-IDCT"],
     ["jsWebpDecode", "WebP JS-only"],
     ["wasmWebpDecode", "WebP CPU-WASM"],

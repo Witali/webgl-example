@@ -63,6 +63,7 @@ if (params.get("diffScale") && diffScaleInput) {
 let wasmDecoderPromise = null;
 let webGpuDecoderPromise = null;
 let webGpuPrescanDecoderPromise = null;
+let webGpuWgslDecoderPromise = null;
 let webpDecoderPromise = null;
 let webpJsDecoderPromise = null;
 let uploadedImageUrl = null;
@@ -231,6 +232,22 @@ async function decodeWithLibrary(url, decoder) {
       width: decoded.width,
       height: decoded.height,
       pixels: new Uint8ClampedArray(decoded.pixels),
+    };
+  }
+
+  if (decoder === "webgpu-wgsl") {
+    if (!webGpuWgslDecoderPromise) {
+      webGpuWgslDecoderPromise = WebGpuWgslJpegDecoder.create();
+    }
+
+    const webGpuWgslDecoder = await webGpuWgslDecoderPromise;
+    const decoded = await webGpuWgslDecoder.decodeUrl(url);
+
+    return {
+      width: decoded.width,
+      height: decoded.height,
+      pixels: new Uint8ClampedArray(decoded.pixels),
+      timings: decoded.timings,
     };
   }
 
@@ -719,6 +736,8 @@ function formatDecoderName(decoder) {
       return "CPU-WASM";
     case "webgpu":
       return "GPU-Huff+GPU-IDCT resident";
+    case "webgpu-wgsl":
+      return "CPU-JS-Huff+WebGPU-WGSL-IDCT";
     case "webgpu-prescan":
       return "CPU-JS-Prescan+GPU-Huff+GPU-IDCT";
     case "wasm-gpu":
