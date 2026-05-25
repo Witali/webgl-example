@@ -18,6 +18,8 @@ const wasm = process.argv[5] || "/wasm/jpeg-idct.wasm";
 const readback = process.env.GPU_READBACK === "1" ? "1" : "0";
 const webgpu = process.env.WEBGPU_JPEG || "";
 const format = process.env.BENCHMARK_FORMAT || "";
+const gpuwarmup = process.env.GPU_WARMUP_MS || "";
+const gpuwarmuppasses = process.env.GPU_WARMUP_PASSES || "";
 
 runBrowserPage({
   projectRoot,
@@ -30,6 +32,8 @@ runBrowserPage({
     wasm,
     readback,
     webgpu,
+    gpuwarmup,
+    gpuwarmuppasses,
   },
   resultExpression: "window.__benchmarkResult || null",
   snapshotExpression: "({ href: location.href, readyState: document.readyState, body: document.body ? document.body.textContent : null, hasDecoder: typeof GpuJpegDecoder, hasResult: Boolean(window.__benchmarkResult) })",

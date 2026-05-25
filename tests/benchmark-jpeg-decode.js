@@ -17,6 +17,8 @@ const warmupCount = Number(params.get("warmup") || 3);
 const readback = params.get("readback") === "1";
 const webGpuMode = params.get("webgpu") || "auto";
 const includeWebGpu = webGpuMode !== "0";
+const gpuWarmupMs = readNumberParam("gpuwarmup", 3000, 0, 10000);
+const gpuWarmupPasses = readNumberParam("gpuwarmuppasses", 256, 1, 512);
 
 runBenchmark().catch((error) => {
   writeResult({
@@ -66,6 +68,7 @@ async function runBenchmark() {
   const webGpuPrescanDecoder = webGpuPrescanState.decoder;
   const webGpuWgslDecoder = webGpuWgslState.decoder;
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
+  const gpuWarmup = await warmGpuBeforeBenchmark();
 
   writeStatus(`warming native browser JPEG decoder (${warmupImages.length})`);
   await runNativeDecode(warmupImages, { collectTimings: false });
@@ -184,6 +187,7 @@ async function runBenchmark() {
       webGpuStatus: webGpuState.status,
       webGpuPrescanStatus: webGpuPrescanState.status,
       webGpuWgslStatus: webGpuWgslState.status,
+      gpuWarmup,
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
@@ -223,6 +227,7 @@ async function runWebpBenchmark() {
   const webpJsDecoder = await JsWebpDecoder.create();
   const webpDecoder = await WasmWebpDecoder.create();
   const warmupImages = loadedImages.slice(0, Math.min(warmupCount, loadedImages.length));
+  const gpuWarmup = await warmGpuBeforeBenchmark();
 
   writeStatus(`warming native browser WebP decoder (${warmupImages.length})`);
   await runNativeImageElementDecode(warmupImages, {
@@ -264,6 +269,7 @@ async function runWebpBenchmark() {
       requestedLimit: limit,
       imageCount: loadedImages.length,
       warmupCount,
+      gpuWarmup,
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
@@ -376,6 +382,265 @@ async function createWebGpuWgslState() {
       decoder: null,
       status: error && error.message ? error.message : String(error),
     };
+  }
+}
+
+function readNumberParam(name, fallback, min, max) {
+  const rawValue = params.get(name);
+  const value = rawValue === null ? fallback : Number(rawValue);
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+async function warmGpuBeforeBenchmark() {
+  if (gpuWarmupMs === 0) {
+    setGpuWarmupStatus("disabled");
+    return {
+      enabled: false,
+      requestedMs: 0,
+      drawPasses: gpuWarmupPasses,
+      status: "disabled",
+      frames: 0,
+      drawCalls: 0,
+      durationMs: 0,
+    };
+  }
+
+  writeStatus(`warming GPU clocks with cube (${gpuWarmupMs} ms)`);
+
+  try {
+    return await runGpuWarmupCube({
+      durationMs: gpuWarmupMs,
+      drawPasses: gpuWarmupPasses,
+    });
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+
+    setGpuWarmupStatus(`skipped: ${message}`);
+    return {
+      enabled: true,
+      requestedMs: gpuWarmupMs,
+      drawPasses: gpuWarmupPasses,
+      status: `skipped: ${message}`,
+      frames: 0,
+      drawCalls: 0,
+      durationMs: 0,
+    };
+  }
+}
+
+// A small visible WebGL scene keeps the GPU busy before clean decoder timings start.
+function runGpuWarmupCube(options) {
+  const canvas = document.getElementById("gpu-warmup-canvas");
+
+  if (!canvas) {
+    return Promise.resolve({
+      enabled: true,
+      requestedMs: options.durationMs,
+      drawPasses: options.drawPasses,
+      status: "skipped: canvas missing",
+      frames: 0,
+      drawCalls: 0,
+      durationMs: 0,
+    });
+  }
+
+  const gl = canvas.getContext("webgl", {
+    antialias: true,
+    depth: true,
+    preserveDrawingBuffer: true,
+  });
+
+  if (!gl) {
+    setGpuWarmupStatus("skipped: WebGL unavailable");
+    return Promise.resolve({
+      enabled: true,
+      requestedMs: options.durationMs,
+      drawPasses: options.drawPasses,
+      status: "skipped: WebGL unavailable",
+      frames: 0,
+      drawCalls: 0,
+      durationMs: 0,
+    });
+  }
+
+  const cube = createGpuWarmupCube(gl);
+  const started = performance.now();
+  let frames = 0;
+  let drawCalls = 0;
+
+  setGpuWarmupStatus("running");
+
+  return new Promise((resolve) => {
+    const render = () => {
+      const elapsed = performance.now() - started;
+      const aspect = gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight);
+
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      gl.clearColor(0.04, 0.055, 0.08, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(cube.program);
+      gl.uniform1f(cube.aspectLocation, aspect);
+
+      for (let pass = 0; pass < options.drawPasses; pass += 1) {
+        gl.uniform1f(cube.angleLocation, elapsed * 0.002 + pass * 0.071);
+        gl.drawElements(gl.TRIANGLES, cube.indexCount, gl.UNSIGNED_SHORT, 0);
+      }
+
+      frames += 1;
+      drawCalls += options.drawPasses;
+
+      if (frames % 12 === 0) {
+        setGpuWarmupStatus(`${formatMs(elapsed)} / ${formatInteger(drawCalls)} draws`);
+      }
+
+      if (elapsed < options.durationMs) {
+        requestAnimationFrame(render);
+        return;
+      }
+
+      gl.finish();
+
+      const durationMs = performance.now() - started;
+      const result = {
+        enabled: true,
+        requestedMs: options.durationMs,
+        drawPasses: options.drawPasses,
+        status: "completed",
+        frames,
+        drawCalls,
+        durationMs,
+      };
+
+      setGpuWarmupStatus(`${formatMs(durationMs)} / ${formatInteger(drawCalls)} draws`);
+      resolve(result);
+    };
+
+    requestAnimationFrame(render);
+  });
+}
+
+function createGpuWarmupCube(gl) {
+  const vertexShader = compileWarmupShader(gl, gl.VERTEX_SHADER, `
+    attribute vec3 aPosition;
+    attribute vec3 aColor;
+    uniform float uAngle;
+    uniform float uAspect;
+    varying vec3 vColor;
+
+    void main() {
+      vec3 p = aPosition;
+      float cy = cos(uAngle);
+      float sy = sin(uAngle);
+      float cx = cos(uAngle * 0.73);
+      float sx = sin(uAngle * 0.73);
+
+      p = vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
+      p = vec3(p.x, cx * p.y - sx * p.z, sx * p.y + cx * p.z);
+
+      float depth = p.z + 4.0;
+      gl_Position = vec4(p.x / (depth * uAspect), p.y / depth, (depth - 2.0) / 4.0, 1.0);
+      vColor = aColor * (0.72 + 0.28 * clamp((p.z + 1.8) / 3.6, 0.0, 1.0));
+    }
+  `);
+  const fragmentShader = compileWarmupShader(gl, gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    varying vec3 vColor;
+
+    void main() {
+      vec3 color = vColor;
+
+      for (int i = 0; i < 8; i++) {
+        color = sqrt(color * 0.92 + vec3(0.08));
+      }
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `);
+  const program = gl.createProgram();
+
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(program) || "GPU warmup program link failed");
+  }
+
+  gl.useProgram(program);
+
+  const vertices = new Float32Array([
+    -1, -1, -1, 0.24, 0.54, 1.00,
+     1, -1, -1, 1.00, 0.34, 0.24,
+     1,  1, -1, 1.00, 0.86, 0.28,
+    -1,  1, -1, 0.30, 0.88, 0.74,
+    -1, -1,  1, 0.92, 0.30, 0.86,
+     1, -1,  1, 0.22, 0.84, 0.48,
+     1,  1,  1, 0.94, 0.96, 0.96,
+    -1,  1,  1, 0.48, 0.66, 1.00,
+  ]);
+  const indices = new Uint16Array([
+    0, 1, 2, 0, 2, 3,
+    4, 6, 5, 4, 7, 6,
+    0, 4, 5, 0, 5, 1,
+    3, 2, 6, 3, 6, 7,
+    1, 5, 6, 1, 6, 2,
+    0, 3, 7, 0, 7, 4,
+  ]);
+  const vertexBuffer = gl.createBuffer();
+  const indexBuffer = gl.createBuffer();
+  const stride = 6 * Float32Array.BYTES_PER_ELEMENT;
+  const positionLocation = gl.getAttribLocation(program, "aPosition");
+  const colorLocation = gl.getAttribLocation(program, "aColor");
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(positionLocation);
+  gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, stride, 0);
+  gl.enableVertexAttribArray(colorLocation);
+  gl.vertexAttribPointer(
+    colorLocation,
+    3,
+    gl.FLOAT,
+    false,
+    stride,
+    3 * Float32Array.BYTES_PER_ELEMENT
+  );
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+
+  return {
+    program,
+    angleLocation: gl.getUniformLocation(program, "uAngle"),
+    aspectLocation: gl.getUniformLocation(program, "uAspect"),
+    indexCount: indices.length,
+  };
+}
+
+function compileWarmupShader(gl, type, source) {
+  const shader = gl.createShader(type);
+
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(shader) || "GPU warmup shader compile failed");
+  }
+
+  return shader;
+}
+
+function setGpuWarmupStatus(message) {
+  const status = document.getElementById("gpu-warmup-status");
+
+  if (status) {
+    status.textContent = message;
   }
 }
 
@@ -830,6 +1095,7 @@ function createSummaryGrid(result) {
     ["Total pixels", formatInteger(result.dataset.totalPixels)],
     ["Megapixels", formatNumber(result.dataset.megapixels, 3)],
     ["First image", `${firstImage.width || 0} x ${firstImage.height || 0}`],
+    ["GPU warmup", formatGpuWarmup(result.config.gpuWarmup)],
   ];
 
   return createDefinitionGrid(items);
@@ -1055,6 +1321,22 @@ function createElement(tagName, text) {
 
 function formatName(value) {
   return String(value || "").toUpperCase();
+}
+
+function formatGpuWarmup(value) {
+  if (!value) {
+    return "-";
+  }
+
+  if (!value.enabled) {
+    return "disabled";
+  }
+
+  if (value.status !== "completed") {
+    return value.status || "-";
+  }
+
+  return `${formatMs(value.durationMs)} / ${formatInteger(value.drawCalls)} draws`;
 }
 
 function formatMs(value) {

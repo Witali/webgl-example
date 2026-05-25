@@ -296,6 +296,15 @@ node tools\run-jpeg-benchmark.js /assets/benchmark-jpegs/manifest.json 1 1 /wasm
 
 To disable the WebGPU rows, set `$env:WEBGPU_JPEG='0'`.
 
+The benchmark page runs a small visible WebGL cube before timed decoder work to
+raise GPU clocks. The default is `3000` ms with `256` draw passes per frame.
+Tune or disable it from the CLI with:
+
+```powershell
+$env:GPU_WARMUP_MS='0'
+$env:GPU_WARMUP_PASSES='128'
+```
+
 For these decoders, benchmark timings use `gpuDecodeMs`, so upload/setup and
 `readPixels()` readback are reported separately and do not count as clean work
 time.

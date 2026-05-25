@@ -212,6 +212,44 @@ pre {
   gap: 18px;
 }
 
+.gpu-warmup-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid #252b33;
+  border-radius: 6px;
+  background: #171b20;
+}
+
+#gpu-warmup-canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 8 / 5;
+  border: 1px solid #39414c;
+  border-radius: 6px;
+  background: #0d1117;
+  cursor: default;
+  image-rendering: auto;
+  transform: none;
+}
+
+.gpu-warmup-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.gpu-warmup-copy strong {
+  color: #f5f7fa;
+  font-size: 15px;
+}
+
+.gpu-warmup-copy span {
+  color: #9aa7b5;
+}
+
 .benchmark-status {
   min-height: 160px;
   place-items: center;
@@ -361,5 +399,9 @@ details pre {
 
   .benchmark-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gpu-warmup-panel {
+    grid-template-columns: 1fr;
   }
 }
