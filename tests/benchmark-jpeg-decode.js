@@ -56,6 +56,7 @@ async function runBenchmark() {
   }
 
   const gpuDecoder = await GpuJpegDecoder.create(gl);
+  const jsJpegDecoder = await JsJpegDecoder.create();
   const wasmDecoder = await WasmJpegDecoder.create(wasmUrl);
   const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
   const webGpuState = await createWebGpuState();
@@ -68,6 +69,9 @@ async function runBenchmark() {
 
   writeStatus(`warming native browser JPEG decoder (${warmupImages.length})`);
   await runNativeDecode(warmupImages, { collectTimings: false });
+
+  writeStatus(`warming CPU-JS-only JPEG decoder (${warmupImages.length})`);
+  await runAsyncPixelDecode(jsJpegDecoder, warmupImages, { collectTimings: false });
 
   writeStatus(`warming CPU-WASM JPEG decoder (${warmupImages.length})`);
   runWasmDecode(wasmDecoder, warmupImages, { collectTimings: false });
@@ -107,6 +111,11 @@ async function runBenchmark() {
 
   writeStatus(`benchmarking native browser JPEG decoder (${loadedImages.length})`);
   const nativeDecode = await runNativeDecode(loadedImages, { collectTimings: true });
+
+  writeStatus(`benchmarking CPU-JS-only JPEG decoder (${loadedImages.length})`);
+  const jsJpegDecode = await runAsyncPixelDecode(jsJpegDecoder, loadedImages, {
+    collectTimings: true,
+  });
 
   writeStatus(`benchmarking CPU-WASM JPEG decoder (${loadedImages.length})`);
   const wasmDecode = runWasmDecode(wasmDecoder, loadedImages, { collectTimings: true });
@@ -178,6 +187,7 @@ async function runBenchmark() {
     },
     dataset: createDataset(loadedImages, totalBytes, totalPixels),
     nativeDecode,
+    jsJpegDecode,
     wasmDecode,
     wasmGpuDecode,
     webGpuDecode,
@@ -407,6 +417,7 @@ function createPhaseTotals() {
     uploadMs: 0,
     preScanMs: 0,
     coreDecodeMs: 0,
+    jsDecodeMs: 0,
     gpuDecodeMs: 0,
     wasmDecodeMs: 0,
     readbackMs: 0,
@@ -445,6 +456,7 @@ function addPhaseTotals(totals, timings) {
     "uploadMs",
     "preScanMs",
     "coreDecodeMs",
+    "jsDecodeMs",
     "gpuDecodeMs",
     "wasmDecodeMs",
     "readbackMs",
@@ -909,6 +921,7 @@ function createRawJsonDetails(result) {
 function getTimingRows(result) {
   const rows = [
     ["nativeDecode", "Browser built-in"],
+    ["jsJpegDecode", "CPU-JS-only"],
     ["wasmDecode", "CPU-WASM"],
     ["wasmGpuDecode", "CPU-WASM+GPU-IDCT"],
     ["webGpuDecode", "GPU-Huff+GPU-IDCT resident"],

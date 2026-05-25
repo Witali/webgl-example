@@ -7,17 +7,18 @@ decoder, upload support, diff contrast controls, and benchmark pages with
 readable timing tables.
 
 This project renders a textured rotating cube and includes a small standalone
-GPU-assisted JPEG decoder in `gpu-jpeg.js`, a WebGPU/WGSL JPEG reconstruction
-variant in `webgpu-wgsl-jpeg.js`, a pure JavaScript lossy WebP/VP8 decoder in
-`WebP-dec.js`, and a WASM/libwebp WebP decoder wrapper in `webp-decoder.js`.
+GPU-assisted JPEG decoder in `gpu-jpeg.js`, a pure JavaScript JPEG decoder in
+`jpeg-js-decoder.js`, a WebGPU/WGSL JPEG reconstruction variant in
+`webgpu-wgsl-jpeg.js`, a pure JavaScript lossy WebP/VP8 decoder in `WebP-dec.js`,
+and a WASM/libwebp WebP decoder wrapper in `webp-decoder.js`.
 
 Open `index.html` through a local server to choose between:
 
 - `cube.html` for the textured rotating cube
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
-- `benchmarks.html` for native browser, WASM, WASM+GPU, GPU, WebGPU WGSL,
-  optional WebGPU resident, and WebP decode timings
+- `benchmarks.html` for native browser, JS-only, WASM, WASM+GPU, GPU, WebGPU
+  WGSL, optional WebGPU resident, and WebP decode timings
 - `browser-specs.html` for WebGPU, WebGL, and WebAssembly capability checks
 
 ## `GpuJpegDecoder`
@@ -45,6 +46,19 @@ The returned object has:
 - `height`
 - `texture`
 - `dispose()`
+
+## `JsJpegDecoder`
+
+`jpeg-js-decoder.js` is the CPU-only JPEG reconstruction path. It reuses the
+existing JavaScript JPEG marker and Huffman parser from `GpuJpegDecoder.parse()`,
+then performs IDCT, chroma upsampling, grayscale or YCbCr-to-RGBA conversion,
+and byte output entirely in JavaScript.
+
+```js
+const decoder = await JsJpegDecoder.create();
+const result = await decoder.decodeUrl("assets/stone-texture-small.jpg");
+console.log(result.pixels); // Uint8ClampedArray RGBA pixels
+```
 
 ## `WasmWebpDecoder`
 
@@ -182,11 +196,12 @@ http://127.0.0.1:8000/tests/visual-jpeg-compare.html
 ```
 
 The page shows the browser-decoded image, the library-decoded image, and an
-amplified diff map. Use the decoder selector to switch between `GPU`, `WebGPU
-WGSL`, `WebGPU resident`, `WASM`, `WASM+GPU`, and WebP paths. The upload input
-accepts JPEG and WebP files. The built-in image list includes a WebP copy of the
-first stone texture plus WebP copies of the public-domain landscape fixtures;
-choosing a WebP asset automatically switches the decoder to a WebP path.
+amplified diff map. Use the decoder selector to switch between `JS-only`, `GPU`,
+`WebGPU WGSL`, `WebGPU resident`, `WASM`, `WASM+GPU`, and WebP paths. The upload
+input accepts JPEG and WebP files. The built-in image list includes a WebP copy
+of the first stone texture plus WebP copies of the public-domain landscape
+fixtures; choosing a WebP asset automatically switches the decoder to a WebP
+path.
 
 Latest visual comparison results:
 
@@ -259,16 +274,18 @@ default browser resolves to Edge, but that launch mode is blocked by policy with
 The benchmark fetches all image files before timing and reports clean work time
 as the main `Work total` metric. Setup/upload and readback are shown separately
 and are not included in the reference speedups. The native path measures only the
-`createImageBitmap()` decode API around a prebuilt `Blob`. The WASM JPEG path
-uses JPEG entropy parse plus WASM IDCT/color conversion as clean work and reports
-copying coefficient blocks into WASM memory as setup. The WASM+GPU, GPU, and
-WebGPU WGSL paths use JPEG entropy parse plus GPU reconstruction as clean work;
-texture or storage-buffer setup, upload, and readback stay in separate columns.
-The result page uses both native browser decode and WASM decode as reference
-columns in the speedup table. The JPEG benchmark also tries the experimental
-WebGPU-resident decoder by default. If WebGPU is unavailable, or if a JPEG falls
-outside that decoder's current SOF0 baseline subset, the row stays visible and
-reports skipped images instead of failing the whole run.
+`createImageBitmap()` decode API around a prebuilt `Blob`. The JS-only JPEG path
+uses JPEG entropy parse plus JavaScript IDCT/color conversion as clean work. The
+WASM JPEG path uses JPEG entropy parse plus WASM IDCT/color conversion as clean
+work and reports copying coefficient blocks into WASM memory as setup. The
+WASM+GPU, GPU, and WebGPU WGSL paths use JPEG entropy parse plus GPU
+reconstruction as clean work; texture or storage-buffer setup, upload, and
+readback stay in separate columns. The result page uses both native browser
+decode and WASM decode as reference columns in the speedup table. The JPEG
+benchmark also tries the experimental WebGPU-resident decoder by default. If
+WebGPU is unavailable, or if a JPEG falls outside that decoder's current SOF0
+baseline subset, the row stays visible and reports skipped images instead of
+failing the whole run.
 
 To force-enable WebGPU in the browser runner, set the browser feature flag:
 

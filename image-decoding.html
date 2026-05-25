@@ -24,6 +24,7 @@
             Decoder
             <select id="decoder" name="decoder">
               <option value="gpu">CPU-JS-Huff+GPU-IDCT</option>
+              <option value="jpeg-js">CPU-JS-only</option>
               <option value="webgpu-wgsl">CPU-JS-Huff+WebGPU-WGSL-IDCT</option>
               <option value="webgpu">GPU-Huff+GPU-IDCT resident</option>
               <option value="webgpu-prescan">CPU-JS-Prescan+GPU-Huff+GPU-IDCT</option>
@@ -81,6 +82,7 @@
     </main>
 
     <script src="./gpu-jpeg.js"></script>
+    <script src="./jpeg-js-decoder.js"></script>
     <script src="./webgpu-jpeg.js"></script>
     <script src="./webgpu-wgsl-jpeg.js"></script>
     <script src="./wasm-jpeg.js"></script>

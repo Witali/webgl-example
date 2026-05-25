@@ -61,6 +61,7 @@ if (params.get("diffScale") && diffScaleInput) {
 }
 
 let wasmDecoderPromise = null;
+let jpegJsDecoderPromise = null;
 let webGpuDecoderPromise = null;
 let webGpuPrescanDecoderPromise = null;
 let webGpuWgslDecoderPromise = null;
@@ -205,6 +206,22 @@ async function decodeWithLibrary(url, decoder) {
 
     const webpDecoder = await webpDecoderPromise;
     const decoded = await webpDecoder.decodeUrl(url);
+
+    return {
+      width: decoded.width,
+      height: decoded.height,
+      pixels: new Uint8ClampedArray(decoded.pixels),
+      timings: decoded.timings,
+    };
+  }
+
+  if (decoder === "jpeg-js") {
+    if (!jpegJsDecoderPromise) {
+      jpegJsDecoderPromise = JsJpegDecoder.create();
+    }
+
+    const jpegJsDecoder = await jpegJsDecoderPromise;
+    const decoded = await jpegJsDecoder.decodeUrl(url);
 
     return {
       width: decoded.width,
@@ -732,6 +749,8 @@ function syncDecoderToImage(url) {
 
 function formatDecoderName(decoder) {
   switch (decoder) {
+    case "jpeg-js":
+      return "CPU-JS-only";
     case "wasm":
       return "CPU-WASM";
     case "webgpu":
