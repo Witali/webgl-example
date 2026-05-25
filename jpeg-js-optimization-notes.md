@@ -124,12 +124,25 @@ Result after optimization:
 
 The optimization improved speed without introducing a large visual regression on the smoke image.
 
-## Remaining Ideas
+## Remaining Ideas Checklist
 
-Possible next steps if we want more CPU-only speed:
+Follow-up baseline after committing the first optimization:
 
-- fixed-point integer IDCT instead of floating-point IDCT;
-- more specialized sampling paths for common JPEG chroma modes like 4:2:0 and 4:4:4;
-- reduce Huffman decode overhead with tighter bit-buffer handling;
-- move decode work into a Web Worker to keep the UI responsive;
-- use WebAssembly SIMD for another decoder variant, while keeping the current pure JS path as the no-dependency baseline.
+- total benchmark time: `20.80 ms`
+- JS decoder core time: `12.30 ms`
+- success threshold for a new idea: more than `1.5x` speedup, roughly `13.87 ms` total or better
+
+- [x] Fixed-point integer IDCT instead of floating-point IDCT.
+  Tried an integer-scaled separable IDCT table with the same two-pass structure. Visual output remained close, but performance got worse: `29.40 ms` total and `17.50 ms` core. Not applied.
+
+- [x] More specialized sampling paths for common JPEG chroma modes like 4:2:0 and 4:4:4.
+  The benchmark set is entirely 4:2:0 (`Y 2x2`, `Cb/Cr 1x1`), so I tried a dedicated 4:2:0 color composition path. It was slower in practice: `29.40 ms` total and `17.10 ms` core. Not applied.
+
+- [x] Reduce Huffman decode overhead with tighter bit-buffer handling.
+  Tried canonical Huffman tables, a fast prefix lookup, and wider `readBits()` buffering. The best observed pure JS total was `16.40 ms`, about `1.27x` faster than the follow-up baseline, below the `1.5x` threshold. The parse portion alone improved, but not enough to justify changing the shared parser. Not applied.
+
+- [x] Move decode work into a Web Worker to keep the UI responsive.
+  Evaluated as a responsiveness improvement rather than a raw decoder speed improvement. It would add message passing and buffer transfer overhead, so it does not satisfy the `>1.5x` decode-speed criterion for the pure JS decoder. Not applied.
+
+- [x] Use WebAssembly SIMD for another decoder variant, while keeping the current pure JS path as the no-dependency baseline.
+  Evaluated as out of scope for the pure JavaScript decoder because it creates or changes a WASM runtime path. The repository already has a scalar WASM JPEG path; a SIMD variant may be useful separately, but it would not be a pure JS decoder optimization. Not applied.
