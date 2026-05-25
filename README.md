@@ -7,8 +7,9 @@ decoder, upload support, diff contrast controls, and benchmark pages with
 readable timing tables.
 
 This project renders a textured rotating cube and includes a small standalone
-GPU-assisted JPEG decoder in `gpu-jpeg.js` plus a WASM/libwebp WebP decoder
-wrapper in `webp-decoder.js`.
+GPU-assisted JPEG decoder in `gpu-jpeg.js`, a pure JavaScript lossy WebP/VP8
+decoder in `WebP-dec.js`, and a WASM/libwebp WebP decoder wrapper in
+`webp-decoder.js`.
 
 Open `index.html` through a local server to choose between:
 
@@ -27,11 +28,15 @@ dequantized DCT blocks through IDCT and YCbCr-to-RGB conversion into a WebGL
 texture.
 
 ```js
-const decoder = new GpuJpegDecoder(gl);
+const decoder = await GpuJpegDecoder.create(gl);
 const result = await decoder.decodeUrl("assets/stone-texture-wic.jpg");
 
 gl.bindTexture(gl.TEXTURE_2D, result.texture);
 ```
+
+The WebGL shader sources are loaded from `shaders/jpeg-idct.vert.glsl` and
+`shaders/jpeg-idct.frag.glsl`, so run the demo through a local server instead
+of opening the HTML files directly from disk.
 
 The returned object has:
 
@@ -53,6 +58,20 @@ from `node_modules`.
 const decoder = await WasmWebpDecoder.create();
 const result = await decoder.decodeUrl("assets/benchmark-webps/bench-000.webp");
 ```
+
+## `PureJsWebpDecoder`
+
+`WebP-dec.js` is a standalone JavaScript WebP decoder path used by
+`webp-js-decoder.js`. It parses RIFF/WebP containers and decodes lossy `VP8 `
+key frames directly in JavaScript without `Image`, `createImageBitmap`,
+`ImageDecoder`, canvas image draw/readback, WASM, or third-party libraries.
+
+The current implementation covers the still-image lossy VP8 subset used by the
+checked-in WebP fixtures, including segmentation, token probability updates,
+intra prediction, coefficient decoding, inverse WHT/IDCT, and YUV-to-RGBA
+conversion. It does not yet implement VP8L lossless WebP, alpha, animation, or
+the VP8 deblocking loop filter, so it is useful as a readable independent decode
+path rather than a bit-exact replacement for libwebp.
 
 ## `WebGpuJpegDecoder`
 

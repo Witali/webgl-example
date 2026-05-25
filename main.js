@@ -3,57 +3,15 @@
 const canvas = document.getElementById("gl-canvas");
 const fpsCounter = document.getElementById("fps-counter");
 const gl = canvas.getContext("webgl", { antialias: true });
+const CUBE_SHADER_URLS = {
+  vertex: "shaders/cube.vert.glsl",
+  fragment: "shaders/cube.frag.glsl",
+};
 
 if (!gl) {
   document.body.textContent = "WebGL is not supported in this browser.";
   throw new Error("WebGL is not supported");
 }
-
-const vertexShaderSource = `
-  attribute vec3 aPosition;
-  attribute vec3 aNormal;
-  attribute vec2 aTexCoord;
-
-  uniform mat4 uModel;
-  uniform mat4 uView;
-  uniform mat4 uProjection;
-  uniform mat3 uNormalMatrix;
-
-  varying vec3 vNormal;
-  varying vec3 vWorldPosition;
-  varying vec2 vTexCoord;
-
-  void main() {
-    vec4 worldPosition = uModel * vec4(aPosition, 1.0);
-    vWorldPosition = worldPosition.xyz;
-    vNormal = normalize(uNormalMatrix * aNormal);
-    vTexCoord = aTexCoord;
-    gl_Position = uProjection * uView * worldPosition;
-  }
-`;
-
-const fragmentShaderSource = `
-  precision mediump float;
-
-  varying vec3 vNormal;
-  varying vec3 vWorldPosition;
-  varying vec2 vTexCoord;
-
-  uniform sampler2D uStoneTexture;
-  uniform vec3 uLightPosition;
-  uniform vec3 uLightColor;
-  uniform vec3 uAmbientColor;
-
-  void main() {
-    vec3 normal = normalize(vNormal);
-    vec3 lightDirection = normalize(uLightPosition - vWorldPosition);
-    float diffuse = max(dot(normal, lightDirection), 0.0);
-
-    vec3 stoneColor = texture2D(uStoneTexture, vTexCoord).rgb;
-    vec3 color = stoneColor * (uAmbientColor + diffuse * uLightColor);
-    gl_FragColor = vec4(color, 1.0);
-  }
-`;
 
 const positions = new Float32Array([
   // Front
@@ -166,53 +124,70 @@ const indices = new Uint16Array([
   20, 21, 22,  20, 22, 23,
 ]);
 
-const program = createProgram(vertexShaderSource, fragmentShaderSource);
-gl.useProgram(program);
-
-const locations = {
-  position: gl.getAttribLocation(program, "aPosition"),
-  normal: gl.getAttribLocation(program, "aNormal"),
-  texCoord: gl.getAttribLocation(program, "aTexCoord"),
-  model: gl.getUniformLocation(program, "uModel"),
-  view: gl.getUniformLocation(program, "uView"),
-  projection: gl.getUniformLocation(program, "uProjection"),
-  normalMatrix: gl.getUniformLocation(program, "uNormalMatrix"),
-  stoneTexture: gl.getUniformLocation(program, "uStoneTexture"),
-  lightPosition: gl.getUniformLocation(program, "uLightPosition"),
-  lightColor: gl.getUniformLocation(program, "uLightColor"),
-  ambientColor: gl.getUniformLocation(program, "uAmbientColor"),
-};
-
-const positionBuffer = bindAttribute(locations.position, positions, 3);
-const normalBuffer = bindAttribute(locations.normal, normals, 3);
-const texCoordBuffer = bindAttribute(locations.texCoord, textureCoordinates, 2);
-
-const indexBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-
-gl.enable(gl.DEPTH_TEST);
-gl.enable(gl.CULL_FACE);
-gl.cullFace(gl.BACK);
-
+let program = null;
+let locations = null;
+let positionBuffer = null;
+let normalBuffer = null;
+let texCoordBuffer = null;
+let indexBuffer = null;
 const view = mat4LookAt([0, 0, 6], [0, 0, 0], [0, 1, 0]);
 const model = mat4Create();
 const projection = mat4Create();
-let stoneTexture = createSolidTexture([120, 120, 120, 255]);
+let stoneTexture = null;
 const fpsState = {
   frameCount: 0,
   lastUpdateTime: 0,
 };
 
-loadTexture("assets/stone-texture-wic.jpg");
+start().catch((error) => {
+  console.error("WebGL cube startup failed.", error);
+  document.body.textContent = `WebGL cube startup failed: ${error.message}`;
+});
 
-gl.uniformMatrix4fv(locations.view, false, view);
-gl.uniform1i(locations.stoneTexture, 0);
-gl.uniform3fv(locations.lightPosition, [3.0, 4.0, 5.0]);
-gl.uniform3fv(locations.lightColor, [0.92, 0.9, 0.82]);
-gl.uniform3fv(locations.ambientColor, [0.22, 0.22, 0.22]);
+async function start() {
+  const shaderSources = await loadShaderPair(CUBE_SHADER_URLS);
 
-requestAnimationFrame(render);
+  program = createProgram(shaderSources.vertex, shaderSources.fragment);
+  gl.useProgram(program);
+
+  locations = {
+    position: gl.getAttribLocation(program, "aPosition"),
+    normal: gl.getAttribLocation(program, "aNormal"),
+    texCoord: gl.getAttribLocation(program, "aTexCoord"),
+    model: gl.getUniformLocation(program, "uModel"),
+    view: gl.getUniformLocation(program, "uView"),
+    projection: gl.getUniformLocation(program, "uProjection"),
+    normalMatrix: gl.getUniformLocation(program, "uNormalMatrix"),
+    stoneTexture: gl.getUniformLocation(program, "uStoneTexture"),
+    lightPosition: gl.getUniformLocation(program, "uLightPosition"),
+    lightColor: gl.getUniformLocation(program, "uLightColor"),
+    ambientColor: gl.getUniformLocation(program, "uAmbientColor"),
+  };
+
+  positionBuffer = bindAttribute(locations.position, positions, 3);
+  normalBuffer = bindAttribute(locations.normal, normals, 3);
+  texCoordBuffer = bindAttribute(locations.texCoord, textureCoordinates, 2);
+
+  indexBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+
+  stoneTexture = createSolidTexture([120, 120, 120, 255]);
+
+  loadTexture("assets/stone-texture-wic.jpg");
+
+  gl.uniformMatrix4fv(locations.view, false, view);
+  gl.uniform1i(locations.stoneTexture, 0);
+  gl.uniform3fv(locations.lightPosition, [3.0, 4.0, 5.0]);
+  gl.uniform3fv(locations.lightColor, [0.92, 0.9, 0.82]);
+  gl.uniform3fv(locations.ambientColor, [0.22, 0.22, 0.22]);
+
+  requestAnimationFrame(render);
+}
 
 function render(time) {
   updateFpsCounter(time);
@@ -260,6 +235,25 @@ function updateFpsCounter(time) {
     fpsState.frameCount = 0;
     fpsState.lastUpdateTime = time;
   }
+}
+
+async function loadShaderPair(urls) {
+  const [vertex, fragment] = await Promise.all([
+    loadText(urls.vertex),
+    loadText(urls.fragment),
+  ]);
+
+  return { vertex, fragment };
+}
+
+async function loadText(url) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch shader ${url}: ${response.status} ${response.statusText}`);
+  }
+
+  return response.text();
 }
 
 function createProgram(vertexSource, fragmentSource) {
@@ -348,7 +342,7 @@ function createSolidTexture(color) {
 async function loadTexture(url) {
   if (window.GpuJpegDecoder) {
     try {
-      const decoder = new window.GpuJpegDecoder(gl);
+      const decoder = await window.GpuJpegDecoder.create(gl);
       const decoded = await decoder.decodeUrl(url);
 
       gl.deleteTexture(stoneTexture);

@@ -32,7 +32,16 @@ const ASSET_JPEG_MANIFESTS = [
 const ASSET_WEBP_MANIFESTS = [
   "/assets/webp-assets/manifest.json",
 ];
+const MIN_IMAGE_ZOOM = 1;
+const MAX_IMAGE_ZOOM = 12;
+const WHEEL_ZOOM_STEP = 1.18;
 const params = new URLSearchParams(window.location.search);
+const comparisonCanvases = [browserCanvas, libraryCanvas, diffCanvas];
+const comparisonZoomState = {
+  scale: 1,
+  originX: 50,
+  originY: 50,
+};
 
 if (params.get("decoder")) {
   decoderSelect.value = params.get("decoder");
@@ -50,6 +59,8 @@ let webpJsDecoderPromise = null;
 let uploadedImageUrl = null;
 let lastDiffSource = null;
 let assetImageUrls = STATIC_ASSET_JPEGS.slice();
+
+initializeCanvasZoom();
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -144,6 +155,7 @@ async function runVisualCompare() {
       height: browserDecoded.height,
     };
 
+    resetAllCanvasZoom();
     drawPixels(browserCanvas, browserDecoded);
     drawPixels(libraryCanvas, libraryDecoded);
     redrawDiffImage();
@@ -247,7 +259,7 @@ async function decodeWithLibrary(url, decoder) {
   if (decoder === "wasm-gpu") {
     gpuDecoder = await WasmGpuJpegDecoder.create(gl, "/wasm/jpeg-idct.wasm");
   } else {
-    gpuDecoder = new GpuJpegDecoder(gl);
+    gpuDecoder = await GpuJpegDecoder.create(gl);
   }
 
   const decoded = await gpuDecoder.decodeUrl(url);
@@ -329,6 +341,66 @@ function drawPixels(canvas, image) {
   canvas.width = image.width;
   canvas.height = image.height;
   context.putImageData(new ImageData(image.pixels, image.width, image.height), 0, 0);
+}
+
+function initializeCanvasZoom() {
+  comparisonCanvases.forEach((canvas) => {
+    const viewport = document.createElement("div");
+
+    viewport.className = "canvas-viewport";
+    viewport.tabIndex = 0;
+    canvas.before(viewport);
+    viewport.append(canvas);
+
+    applyCanvasZoom(canvas, comparisonZoomState);
+
+    viewport.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      updateCanvasZoomFromWheel(viewport, event);
+    }, { passive: false });
+  });
+}
+
+function updateCanvasZoomFromWheel(viewport, event) {
+  const rect = viewport.getBoundingClientRect();
+  const wheelSteps = Math.max(-4, Math.min(4, -event.deltaY / 100));
+
+  if (rect.width <= 0 || rect.height <= 0 || wheelSteps === 0) {
+    return;
+  }
+
+  comparisonZoomState.originX = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100));
+  comparisonZoomState.originY = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100));
+  comparisonZoomState.scale = Math.max(
+    MIN_IMAGE_ZOOM,
+    Math.min(MAX_IMAGE_ZOOM, comparisonZoomState.scale * Math.pow(WHEEL_ZOOM_STEP, wheelSteps))
+  );
+
+  if (comparisonZoomState.scale === MIN_IMAGE_ZOOM) {
+    comparisonZoomState.originX = 50;
+    comparisonZoomState.originY = 50;
+  }
+
+  applyComparisonCanvasZoom();
+}
+
+function resetAllCanvasZoom() {
+  comparisonZoomState.scale = 1;
+  comparisonZoomState.originX = 50;
+  comparisonZoomState.originY = 50;
+  applyComparisonCanvasZoom();
+}
+
+function applyComparisonCanvasZoom() {
+  comparisonCanvases.forEach((canvas) => {
+    applyCanvasZoom(canvas, comparisonZoomState);
+  });
+}
+
+function applyCanvasZoom(canvas, state) {
+  canvas.style.setProperty("--image-zoom", state.scale.toFixed(3));
+  canvas.style.setProperty("--image-zoom-origin-x", `${state.originX.toFixed(2)}%`);
+  canvas.style.setProperty("--image-zoom-origin-y", `${state.originY.toFixed(2)}%`);
 }
 
 function createDiffImage(actual, expected, width, height, scale) {

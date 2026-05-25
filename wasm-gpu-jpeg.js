@@ -13,6 +13,8 @@
     }
 
     static async create(gl, url) {
+      await global.GpuJpegDecoder.loadShaderSources();
+
       const wasmUrl = url || "wasm/jpeg-idct.wasm";
       let result;
 

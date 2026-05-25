@@ -358,6 +358,8 @@ function contentType(filePath) {
       return "application/wasm";
     case ".css":
       return "text/css; charset=utf-8";
+    case ".glsl":
+      return "text/plain; charset=utf-8";
     case ".jpg":
     case ".jpeg":
       return "image/jpeg";

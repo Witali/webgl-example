@@ -46,7 +46,7 @@ async function runBenchmark() {
     throw new Error("WebGL is not available in this browser.");
   }
 
-  const gpuDecoder = new GpuJpegDecoder(gl);
+  const gpuDecoder = await GpuJpegDecoder.create(gl);
   const wasmDecoder = await WasmJpegDecoder.create(wasmUrl);
   const wasmGpuDecoder = await WasmGpuJpegDecoder.create(gl, wasmUrl);
   const webGpuState = await createWebGpuState();

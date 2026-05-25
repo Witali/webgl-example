@@ -22,7 +22,7 @@ async function runComparison() {
   }
 
   writeStatus("running GPU JPEG decoder");
-  const decoder = new GpuJpegDecoder(gl);
+  const decoder = await GpuJpegDecoder.create(gl);
   const gpuDecoded = await decoder.decodeUrl(JPEG_URL);
   writeStatus("reading GPU decoded pixels");
   const gpuPixels = readTextureTopLeft(gl, gpuDecoded.texture, gpuDecoded.width, gpuDecoded.height);
