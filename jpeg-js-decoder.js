@@ -51,7 +51,12 @@
       }
 
       const decodeStarted = performance.now();
-      const planes = jpeg.components.map((component) => decodeComponentPlane(component));
+      const blockTemp = new Float64Array(64);
+      const planes = [];
+
+      for (let index = 0; index < jpeg.components.length; index += 1) {
+        planes.push(decodeComponentPlane(jpeg.components[index], blockTemp));
+      }
 
       while (planes.length < 3) {
         planes.push(planes[0]);
@@ -81,7 +86,7 @@
     }
   }
 
-  function decodeComponentPlane(component) {
+  function decodeComponentPlane(component, blockTemp) {
     const width = component.blockCountX * 8;
     const height = component.blockCountY * 8;
     const plane = new Uint8Array(width * height);
@@ -91,7 +96,7 @@
       for (let blockX = 0; blockX < component.blockCountX; blockX += 1) {
         const blockOffset = (blockY * component.blockCountX + blockX) * 64;
 
-        decodeBlock(blocks, blockOffset, plane, width, blockX * 8, blockY * 8);
+        decodeBlock(blocks, blockOffset, plane, width, blockX * 8, blockY * 8, blockTemp);
       }
     }
 
@@ -104,52 +109,181 @@
     };
   }
 
-  function decodeBlock(blocks, blockOffset, plane, planeWidth, originX, originY) {
+  function decodeBlock(blocks, blockOffset, plane, planeWidth, originX, originY, blockTemp) {
+    if (isDcOnly(blocks, blockOffset)) {
+      fillDcBlock(blocks, blockOffset, plane, planeWidth, originX, originY);
+      return;
+    }
+
+    runVerticalIdct(blocks, blockOffset, blockTemp);
+    runHorizontalIdct(blockTemp, plane, planeWidth, originX, originY);
+  }
+
+  function isDcOnly(blocks, blockOffset) {
+    for (let index = 1; index < 64; index += 1) {
+      if (blocks[blockOffset + index] !== 0) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function fillDcBlock(blocks, blockOffset, plane, planeWidth, originX, originY) {
+    const value = clampByte(0.125 * blocks[blockOffset] + 128);
+    let target = originY * planeWidth + originX;
+
+    for (let row = 0; row < 8; row += 1) {
+      plane.fill(value, target, target + 8);
+      target += planeWidth;
+    }
+  }
+
+  // Separable IDCT reduces each block from 64 full 2D sums to two 1D passes.
+  function runVerticalIdct(blocks, blockOffset, blockTemp) {
     for (let localY = 0; localY < 8; localY += 1) {
       const yBasisOffset = localY * 8;
+      const tempOffset = localY * 8;
+      const b0 = BASIS_VALUES[yBasisOffset];
+      const b1 = BASIS_VALUES[yBasisOffset + 1];
+      const b2 = BASIS_VALUES[yBasisOffset + 2];
+      const b3 = BASIS_VALUES[yBasisOffset + 3];
+      const b4 = BASIS_VALUES[yBasisOffset + 4];
+      const b5 = BASIS_VALUES[yBasisOffset + 5];
+      const b6 = BASIS_VALUES[yBasisOffset + 6];
+      const b7 = BASIS_VALUES[yBasisOffset + 7];
+
+      for (let column = 0; column < 8; column += 1) {
+        blockTemp[tempOffset + column] =
+          blocks[blockOffset + column] * b0 +
+          blocks[blockOffset + 8 + column] * b1 +
+          blocks[blockOffset + 16 + column] * b2 +
+          blocks[blockOffset + 24 + column] * b3 +
+          blocks[blockOffset + 32 + column] * b4 +
+          blocks[blockOffset + 40 + column] * b5 +
+          blocks[blockOffset + 48 + column] * b6 +
+          blocks[blockOffset + 56 + column] * b7;
+      }
+    }
+  }
+
+  function runHorizontalIdct(blockTemp, plane, planeWidth, originX, originY) {
+    for (let localY = 0; localY < 8; localY += 1) {
+      const tempOffset = localY * 8;
+      const outputOffset = (originY + localY) * planeWidth + originX;
+      const t0 = blockTemp[tempOffset];
+      const t1 = blockTemp[tempOffset + 1];
+      const t2 = blockTemp[tempOffset + 2];
+      const t3 = blockTemp[tempOffset + 3];
+      const t4 = blockTemp[tempOffset + 4];
+      const t5 = blockTemp[tempOffset + 5];
+      const t6 = blockTemp[tempOffset + 6];
+      const t7 = blockTemp[tempOffset + 7];
 
       for (let localX = 0; localX < 8; localX += 1) {
         const xBasisOffset = localX * 8;
-        let value = 0;
+        const value =
+          t0 * BASIS_VALUES[xBasisOffset] +
+          t1 * BASIS_VALUES[xBasisOffset + 1] +
+          t2 * BASIS_VALUES[xBasisOffset + 2] +
+          t3 * BASIS_VALUES[xBasisOffset + 3] +
+          t4 * BASIS_VALUES[xBasisOffset + 4] +
+          t5 * BASIS_VALUES[xBasisOffset + 5] +
+          t6 * BASIS_VALUES[xBasisOffset + 6] +
+          t7 * BASIS_VALUES[xBasisOffset + 7];
 
-        for (let row = 0; row < 8; row += 1) {
-          const yBasis = BASIS_VALUES[yBasisOffset + row];
-          const rowOffset = blockOffset + row * 8;
-
-          for (let column = 0; column < 8; column += 1) {
-            value += blocks[rowOffset + column] *
-              BASIS_VALUES[xBasisOffset + column] *
-              yBasis;
-          }
-        }
-
-        plane[(originY + localY) * planeWidth + originX + localX] =
-          clampByte(0.25 * value + 128);
+        plane[outputOffset + localX] = clampByte(0.25 * value + 128);
       }
     }
   }
 
   function composeRgbaPixels(jpeg, planes) {
     const output = new Uint8ClampedArray(jpeg.width * jpeg.height * 4);
-    const luma = planes[0];
-    const isGrayscale = jpeg.components.length === 1;
+    const samplers = createComponentSamplers(jpeg, planes);
+
+    if (jpeg.components.length === 1) {
+      composeGrayscalePixels(jpeg, samplers[0], output);
+      return output;
+    }
+
+    composeColorPixels(jpeg, samplers[0], samplers[1], samplers[2], output);
+    return output;
+  }
+
+  function composeGrayscalePixels(jpeg, sampler, output) {
+    const component = sampler.component;
+    const plane = component.plane;
+    let target = 0;
+
+    if (sampler.direct) {
+      for (let y = 0; y < jpeg.height; y += 1) {
+        let source = y * component.width;
+
+        for (let x = 0; x < jpeg.width; x += 1) {
+          const gray = plane[source + x];
+
+          output[target] = gray;
+          output[target + 1] = gray;
+          output[target + 2] = gray;
+          output[target + 3] = 255;
+          target += 4;
+        }
+      }
+
+      return;
+    }
+
+    for (let y = 0; y < jpeg.height; y += 1) {
+      const y0Base = sampler.y0[y] * component.width;
+      const y1Base = sampler.y1[y] * component.width;
+      const ty = sampler.ty[y];
+
+      for (let x = 0; x < jpeg.width; x += 1) {
+        const gray = sampleMappedComponent(sampler, plane, y0Base, y1Base, ty, x);
+
+        output[target] = gray;
+        output[target + 1] = gray;
+        output[target + 2] = gray;
+        output[target + 3] = 255;
+        target += 4;
+      }
+    }
+  }
+
+  function composeColorPixels(jpeg, ySampler, cbSampler, crSampler, output) {
+    const yPlane = ySampler.component.plane;
+    const cbPlane = cbSampler.component.plane;
+    const crPlane = crSampler.component.plane;
+    const yWidth = ySampler.component.width;
+    const cbWidth = cbSampler.component.width;
+    const crWidth = crSampler.component.width;
     let target = 0;
 
     for (let y = 0; y < jpeg.height; y += 1) {
+      const yDirectBase = y * yWidth;
+      const y0Base = ySampler.direct ? 0 : ySampler.y0[y] * yWidth;
+      const y1Base = ySampler.direct ? 0 : ySampler.y1[y] * yWidth;
+      const cbDirectBase = y * cbWidth;
+      const cb0Base = cbSampler.direct ? 0 : cbSampler.y0[y] * cbWidth;
+      const cb1Base = cbSampler.direct ? 0 : cbSampler.y1[y] * cbWidth;
+      const crDirectBase = y * crWidth;
+      const cr0Base = crSampler.direct ? 0 : crSampler.y0[y] * crWidth;
+      const cr1Base = crSampler.direct ? 0 : crSampler.y1[y] * crWidth;
+      const yTy = ySampler.direct ? 0 : ySampler.ty[y];
+      const cbTy = cbSampler.direct ? 0 : cbSampler.ty[y];
+      const crTy = crSampler.direct ? 0 : crSampler.ty[y];
+
       for (let x = 0; x < jpeg.width; x += 1) {
-        const yy = sampleComponent(jpeg, luma, x, y);
+        const yy = ySampler.direct
+          ? yPlane[yDirectBase + x]
+          : sampleMappedComponent(ySampler, yPlane, y0Base, y1Base, yTy, x);
+        const cb = (cbSampler.direct
+          ? cbPlane[cbDirectBase + x]
+          : sampleMappedComponent(cbSampler, cbPlane, cb0Base, cb1Base, cbTy, x)) - 128;
+        const cr = (crSampler.direct
+          ? crPlane[crDirectBase + x]
+          : sampleMappedComponent(crSampler, crPlane, cr0Base, cr1Base, crTy, x)) - 128;
 
-        if (isGrayscale) {
-          output[target] = yy;
-          output[target + 1] = yy;
-          output[target + 2] = yy;
-          output[target + 3] = 255;
-          target += 4;
-          continue;
-        }
-
-        const cb = sampleComponent(jpeg, planes[1], x, y) - 128;
-        const cr = sampleComponent(jpeg, planes[2], x, y) - 128;
 
         output[target] = clampByte(yy + 1.402 * cr);
         output[target + 1] = clampByte(yy - 0.344136286201022 * cb - 0.714136285714286 * cr);
@@ -158,51 +292,98 @@
         target += 4;
       }
     }
-
-    return output;
   }
 
-  function sampleComponent(jpeg, component, imageX, imageY) {
-    const scaleX = component.horizontalSampling / jpeg.maxHorizontalSampling;
-    const scaleY = component.verticalSampling / jpeg.maxVerticalSampling;
-    const componentX = (imageX + 0.5) * scaleX - 0.5;
-    const componentY = (imageY + 0.5) * scaleY - 0.5;
-    let x0 = Math.floor(componentX);
-    let y0 = Math.floor(componentY);
-    let x1 = x0 + 1;
-    let y1 = y0 + 1;
-    let tx = componentX - x0;
-    let ty = componentY - y0;
+  function createComponentSamplers(jpeg, planes) {
+    const samplers = [];
 
-    x0 = clampInt(x0, 0, component.width - 1);
-    y0 = clampInt(y0, 0, component.height - 1);
-    x1 = clampInt(x1, 0, component.width - 1);
-    y1 = clampInt(y1, 0, component.height - 1);
-
-    if (x0 === x1) {
-      tx = 0;
+    for (let index = 0; index < planes.length; index += 1) {
+      samplers.push(createComponentSampler(jpeg, planes[index]));
     }
 
-    if (y0 === y1) {
-      ty = 0;
-    }
-
-    const top = mix(
-      component.plane[y0 * component.width + x0],
-      component.plane[y0 * component.width + x1],
-      tx
-    );
-    const bottom = mix(
-      component.plane[y1 * component.width + x0],
-      component.plane[y1 * component.width + x1],
-      tx
-    );
-
-    return mix(top, bottom, ty);
+    return samplers;
   }
 
-  function mix(a, b, t) {
-    return a + (b - a) * t;
+  function createComponentSampler(jpeg, component) {
+    const direct =
+      component.horizontalSampling === jpeg.maxHorizontalSampling &&
+      component.verticalSampling === jpeg.maxVerticalSampling;
+
+    if (direct) {
+      return {
+        component,
+        direct: true,
+        x0: null,
+        x1: null,
+        tx: null,
+        y0: null,
+        y1: null,
+        ty: null,
+      };
+    }
+
+    const xMap = createAxisSampleMap(
+      jpeg.width,
+      component.width,
+      component.horizontalSampling,
+      jpeg.maxHorizontalSampling
+    );
+    const yMap = createAxisSampleMap(
+      jpeg.height,
+      component.height,
+      component.verticalSampling,
+      jpeg.maxVerticalSampling
+    );
+
+    return {
+      component,
+      direct: false,
+      x0: xMap.first,
+      x1: xMap.second,
+      tx: xMap.weight,
+      y0: yMap.first,
+      y1: yMap.second,
+      ty: yMap.weight,
+    };
+  }
+
+  function createAxisSampleMap(imageLength, componentLength, sampling, maxSampling) {
+    const first = new Uint32Array(imageLength);
+    const second = new Uint32Array(imageLength);
+    const weight = new Float64Array(imageLength);
+    const scale = sampling / maxSampling;
+
+    for (let index = 0; index < imageLength; index += 1) {
+      const componentPosition = (index + 0.5) * scale - 0.5;
+      let p0 = Math.floor(componentPosition);
+      let p1 = p0 + 1;
+      let t = componentPosition - p0;
+
+      p0 = clampInt(p0, 0, componentLength - 1);
+      p1 = clampInt(p1, 0, componentLength - 1);
+
+      if (p0 === p1) {
+        t = 0;
+      }
+
+      first[index] = p0;
+      second[index] = p1;
+      weight[index] = t;
+    }
+
+    return { first, second, weight };
+  }
+
+  function sampleMappedComponent(sampler, plane, y0Base, y1Base, ty, x) {
+    const x0 = sampler.x0[x];
+    const x1 = sampler.x1[x];
+    const tx = sampler.tx[x];
+    const top0 = plane[y0Base + x0];
+    const top = top0 + (plane[y0Base + x1] - top0) * tx;
+    const bottom0 = plane[y1Base + x0];
+    const bottom = bottom0 + (plane[y1Base + x1] - bottom0) * tx;
+
+    return top + (bottom - top) * ty;
   }
 
   function clampInt(value, min, max) {
