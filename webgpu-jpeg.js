@@ -178,12 +178,6 @@
       return i32(value);
     }
 
-    fn clearBlock(blockOffset: u32) {
-      for (var index = 0u; index < 64u; index = index + 1u) {
-        coeffs[blockOffset + index] = 0i;
-      }
-    }
-
     fn getPreviousDc(componentIndex: u32) -> i32 {
       if (componentIndex == 0u) {
         return previousDc0;
@@ -220,8 +214,6 @@
       let coeffBase = u32(component(componentIndex, 4u));
       let quantTable = u32(component(componentIndex, 5u));
       let blockOffset = coeffBase + blockIndex * 64u;
-
-      clearBlock(blockOffset);
 
       let dcLength = decodeHuffman(dcSlot);
       let dcDiff = receiveAndExtend(dcLength);
@@ -475,12 +467,6 @@
       return i32(value);
     }
 
-    fn clearBlock(blockOffset: u32) {
-      for (var index = 0u; index < 64u; index = index + 1u) {
-        coeffs[blockOffset + index] = 0i;
-      }
-    }
-
     fn decodeBlock(
       componentIndex: u32,
       blockIndex: u32,
@@ -491,8 +477,6 @@
       let coeffBase = u32(component(componentIndex, 4u));
       let quantTable = u32(component(componentIndex, 5u));
       let blockOffset = coeffBase + blockIndex * 64u;
-
-      clearBlock(blockOffset);
 
       let dcLength = decodeHuffman(dcSlot);
       let dcDiff = receiveAndExtend(dcLength);
@@ -814,7 +798,7 @@
       const metadata = createMetadata(jpeg, params);
       const coefficientBuffer = device.createBuffer({
         size: align(jpeg.totalCoefficientCount * 4, 4),
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
       });
       const componentPixelBuffer = device.createBuffer({
         size: align(jpeg.totalCoefficientCount * 4, 4),
@@ -908,6 +892,9 @@
       const decodeStarted = performance.now();
 
       const encoder = device.createCommandEncoder();
+
+      encoder.clearBuffer(prepared.coefficientBuffer);
+
       const entropyPass = encoder.beginComputePass();
 
       entropyPass.setPipeline(prepared.entropyPipeline);
