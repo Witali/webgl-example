@@ -9,6 +9,9 @@
 
 const canvas = document.getElementById("gl-canvas");
 const fpsCounter = document.getElementById("fps-counter");
+const materialControls = document.getElementById("material-controls");
+const heightStrengthInput = document.getElementById("height-strength");
+const heightStrengthValue = document.getElementById("height-strength-value");
 const gl = canvas.getContext("webgl", { antialias: true });
 const fpsState = {
   frameCount: 0,
@@ -29,6 +32,7 @@ start().catch((error) => {
 async function start() {
   cubeRenderer = await TexturedCubeRenderer.create(gl);
   window.__texturedCubeRenderer = cubeRenderer;
+  initializeMaterialControls();
   cubeRenderer.loadTexture("assets/stone-texture-wic.jpg");
   requestAnimationFrame(render);
 }
@@ -59,5 +63,37 @@ function updateFpsCounter(time) {
     fpsCounter.textContent = `${fps} FPS`;
     fpsState.frameCount = 0;
     fpsState.lastUpdateTime = time;
+  }
+}
+
+function initializeMaterialControls() {
+  if (!materialControls || !heightStrengthInput) {
+    return;
+  }
+
+  materialControls.addEventListener("change", (event) => {
+    if (event.target && event.target.name === "material") {
+      applySelectedMaterial();
+    }
+  });
+  heightStrengthInput.addEventListener("input", () => {
+    cubeRenderer.setHeightStrength(Number(heightStrengthInput.value));
+    updateHeightStrengthLabel();
+  });
+  applySelectedMaterial();
+}
+
+function applySelectedMaterial() {
+  const formData = new FormData(materialControls);
+  const material = formData.get("material") || "matte";
+
+  cubeRenderer.setMaterial(String(material));
+  heightStrengthInput.value = cubeRenderer.material.heightStrength.toFixed(2);
+  updateHeightStrengthLabel();
+}
+
+function updateHeightStrengthLabel() {
+  if (heightStrengthValue) {
+    heightStrengthValue.textContent = Number(heightStrengthInput.value).toFixed(2);
   }
 }

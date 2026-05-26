@@ -42,3 +42,111 @@ canvas {
   text-align: right;
   pointer-events: none;
 }
+
+.material-controls {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(18, 20, 24, 0.78);
+  color: #eef2f5;
+  font: 12px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.material-controls fieldset {
+  display: flex;
+  align-items: end;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.material-controls legend,
+.relief-control span {
+  margin-bottom: 5px;
+  color: #aeb8c4;
+  font-size: 11px;
+}
+
+.material-option {
+  position: relative;
+}
+
+.material-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.material-option span {
+  display: block;
+  min-width: 74px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(28, 33, 40, 0.9);
+  color: #eef2f5;
+  text-align: center;
+  cursor: pointer;
+}
+
+.material-option input:checked + span {
+  border-color: #3b82e6;
+  background: rgba(47, 116, 208, 0.88);
+}
+
+.material-option input:focus-visible + span,
+#height-strength:focus-visible {
+  outline: 2px solid #8fbfff;
+  outline-offset: 2px;
+}
+
+.relief-control {
+  display: grid;
+  gap: 5px;
+}
+
+.relief-control span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+#height-strength-value {
+  color: #f5f7fa;
+  font-weight: 650;
+}
+
+#height-strength {
+  width: 150px;
+  accent-color: #4a91ee;
+}
+
+@media (max-width: 520px) {
+  .material-controls {
+    right: 12px;
+  }
+
+  .material-controls fieldset,
+  .relief-control {
+    width: 100%;
+  }
+
+  .material-option {
+    flex: 1;
+  }
+
+  #height-strength {
+    width: 100%;
+  }
+}

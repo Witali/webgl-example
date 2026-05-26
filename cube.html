@@ -9,9 +9,26 @@
   <body>
     <a class="back-link" href="./index.html">Home</a>
     <div id="fps-counter" aria-live="polite">0 FPS</div>
+    <form id="material-controls" class="material-controls" aria-label="Material controls">
+      <fieldset>
+        <legend>Материал</legend>
+        <label class="material-option">
+          <input type="radio" name="material" value="matte" checked>
+          <span>Матовый</span>
+        </label>
+        <label class="material-option">
+          <input type="radio" name="material" value="glossy">
+          <span>Глянцевый</span>
+        </label>
+      </fieldset>
+      <label class="relief-control">
+        <span>Рельеф <output id="height-strength-value" for="height-strength">0.60</output></span>
+        <input id="height-strength" type="range" min="0" max="1" step="0.05" value="0.60">
+      </label>
+    </form>
     <canvas id="gl-canvas" aria-label="Rotating WebGL cube"></canvas>
     <script src="./gpu-jpeg.js"></script>
-    <script src="./textured-cube.js"></script>
-    <script src="./main.js"></script>
+    <script src="./textured-cube.js?v=material-height"></script>
+    <script src="./main.js?v=material-height"></script>
   </body>
 </html>

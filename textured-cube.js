@@ -2,8 +2,8 @@
  * Purpose: Shared WebGL textured cube renderer used by the main demo and the
  * benchmark GPU warm-up panel.
  * Processing blocks:
- * - Load the cube GLSL shaders and upload the shared cube geometry.
- * - Maintain model/view/projection matrices, lighting uniforms, and texture state.
+ * - Load the cube GLSL shaders and upload the shared cube geometry/tangent basis.
+ * - Maintain model/view/projection matrices, lighting uniforms, material state, and textures.
  * - Draw one or many passes of the same lit rotating stone cube.
  */
 (function (global) {
@@ -11,8 +11,8 @@
 
   const SCRIPT_URL = resolveScriptUrl();
   const DEFAULT_SHADER_URLS = {
-    vertex: resolveProjectUrl("shaders/cube.vert.glsl"),
-    fragment: resolveProjectUrl("shaders/cube.frag.glsl"),
+    vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=material-height"),
+    fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=material-height"),
   };
   const CUBE_GEOMETRY = {
     positions: new Float32Array([
@@ -31,6 +31,22 @@
        1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
       -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0,
     ]),
+    tangents: new Float32Array([
+       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
+      -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0,
+       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
+       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
+       0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,
+       0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,
+    ]),
+    bitangents: new Float32Array([
+       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
+       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
+       0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,
+       0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,
+       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
+       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
+    ]),
     texCoords: new Float32Array([
       0, 0, 1, 0, 1, 1, 0, 1,
       0, 0, 1, 0, 1, 1, 0, 1,
@@ -48,6 +64,19 @@
       20, 21, 22,  20, 22, 23,
     ]),
   };
+  const MATERIAL_PRESETS = {
+    matte: {
+      specularStrength: 0.06,
+      shininess: 10,
+      heightStrength: 0.6,
+    },
+    glossy: {
+      specularStrength: 0.78,
+      shininess: 72,
+      heightStrength: 0.48,
+    },
+  };
+  const BRICK_HEIGHT_MAP_SIZE = 256;
 
   class TexturedCubeRenderer {
     static async create(gl, options) {
@@ -65,24 +94,34 @@
       this.locations = createLocations(gl, this.program);
       this.positionBuffer = bindAttribute(gl, this.locations.position, CUBE_GEOMETRY.positions, 3);
       this.normalBuffer = bindAttribute(gl, this.locations.normal, CUBE_GEOMETRY.normals, 3);
+      this.tangentBuffer = bindAttribute(gl, this.locations.tangent, CUBE_GEOMETRY.tangents, 3);
+      this.bitangentBuffer = bindAttribute(gl, this.locations.bitangent, CUBE_GEOMETRY.bitangents, 3);
       this.texCoordBuffer = bindAttribute(gl, this.locations.texCoord, CUBE_GEOMETRY.texCoords, 2);
       this.indexBuffer = createIndexBuffer(gl, CUBE_GEOMETRY.indices);
       this.indexCount = CUBE_GEOMETRY.indices.length;
+      this.viewPosition = this.options.eye || [0, 0, 6];
       this.view = mat4LookAt(
-        this.options.eye || [0, 0, 6],
+        this.viewPosition,
         this.options.target || [0, 0, 0],
         this.options.up || [0, 1, 0]
       );
       this.model = mat4Create();
       this.projection = mat4Create();
       this.texture = createSolidTexture(gl, this.options.placeholderColor || [120, 120, 120, 255]);
+      this.heightTexture = createBrickHeightTexture(gl, this.options.heightMapSize || BRICK_HEIGHT_MAP_SIZE);
+      this.heightTexelSize = 1 / (this.options.heightMapSize || BRICK_HEIGHT_MAP_SIZE);
+      this.material = { ...MATERIAL_PRESETS.matte };
 
       gl.useProgram(this.program);
       gl.uniformMatrix4fv(this.locations.view, false, this.view);
       gl.uniform1i(this.locations.stoneTexture, 0);
+      gl.uniform1i(this.locations.heightTexture, 1);
       gl.uniform3fv(this.locations.lightPosition, this.options.lightPosition || [3.0, 4.0, 5.0]);
       gl.uniform3fv(this.locations.lightColor, this.options.lightColor || [0.92, 0.9, 0.82]);
       gl.uniform3fv(this.locations.ambientColor, this.options.ambientColor || [0.22, 0.22, 0.22]);
+      gl.uniform3fv(this.locations.viewPosition, this.viewPosition);
+      gl.uniform2fv(this.locations.heightTexelSize, [this.heightTexelSize, this.heightTexelSize]);
+      this.setMaterial(this.options.material || "matte");
     }
 
     async loadTexture(url, options) {
@@ -124,6 +163,32 @@
       }
 
       this.texture = texture;
+    }
+
+    setMaterial(material) {
+      const preset = typeof material === "string" ? MATERIAL_PRESETS[material] : null;
+      const values = preset || material || MATERIAL_PRESETS.matte;
+
+      this.material = {
+        ...this.material,
+        ...values,
+      };
+
+      this.applyMaterialUniforms();
+    }
+
+    setHeightStrength(heightStrength) {
+      this.material.heightStrength = clamp(Number(heightStrength), 0, 1);
+      this.applyMaterialUniforms();
+    }
+
+    applyMaterialUniforms() {
+      const gl = this.gl;
+
+      gl.useProgram(this.program);
+      gl.uniform1f(this.locations.specularStrength, this.material.specularStrength);
+      gl.uniform1f(this.locations.shininess, this.material.shininess);
+      gl.uniform1f(this.locations.heightStrength, this.material.heightStrength);
     }
 
     resizeToDisplaySize(devicePixelRatio) {
@@ -178,9 +243,12 @@
       this.bindGeometry();
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texture);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.heightTexture);
       gl.uniformMatrix4fv(this.locations.projection, false, this.projection);
       gl.uniformMatrix4fv(this.locations.model, false, this.model);
       gl.uniformMatrix3fv(this.locations.normalMatrix, false, mat3FromMat4(this.model));
+      this.applyMaterialUniforms();
 
       for (let pass = 0; pass < drawPasses; pass += 1) {
         gl.drawElements(gl.TRIANGLES, this.indexCount, gl.UNSIGNED_SHORT, 0);
@@ -192,6 +260,8 @@
 
       bindAttributeBuffer(gl, this.locations.position, this.positionBuffer, 3);
       bindAttributeBuffer(gl, this.locations.normal, this.normalBuffer, 3);
+      bindAttributeBuffer(gl, this.locations.tangent, this.tangentBuffer, 3);
+      bindAttributeBuffer(gl, this.locations.bitangent, this.bitangentBuffer, 3);
       bindAttributeBuffer(gl, this.locations.texCoord, this.texCoordBuffer, 2);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
     }
@@ -220,15 +290,23 @@
     return {
       position: gl.getAttribLocation(program, "aPosition"),
       normal: gl.getAttribLocation(program, "aNormal"),
+      tangent: gl.getAttribLocation(program, "aTangent"),
+      bitangent: gl.getAttribLocation(program, "aBitangent"),
       texCoord: gl.getAttribLocation(program, "aTexCoord"),
       model: gl.getUniformLocation(program, "uModel"),
       view: gl.getUniformLocation(program, "uView"),
       projection: gl.getUniformLocation(program, "uProjection"),
       normalMatrix: gl.getUniformLocation(program, "uNormalMatrix"),
       stoneTexture: gl.getUniformLocation(program, "uStoneTexture"),
+      heightTexture: gl.getUniformLocation(program, "uHeightTexture"),
+      heightTexelSize: gl.getUniformLocation(program, "uHeightTexelSize"),
+      heightStrength: gl.getUniformLocation(program, "uHeightStrength"),
       lightPosition: gl.getUniformLocation(program, "uLightPosition"),
       lightColor: gl.getUniformLocation(program, "uLightColor"),
       ambientColor: gl.getUniformLocation(program, "uAmbientColor"),
+      viewPosition: gl.getUniformLocation(program, "uViewPosition"),
+      specularStrength: gl.getUniformLocation(program, "uSpecularStrength"),
+      shininess: gl.getUniformLocation(program, "uShininess"),
     };
   }
 
@@ -281,6 +359,10 @@
   }
 
   function bindAttributeBuffer(gl, location, buffer, size) {
+    if (location < 0) {
+      return;
+    }
+
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
@@ -313,6 +395,54 @@
     );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    return texture;
+  }
+
+  function createBrickHeightTexture(gl, size) {
+    const pixels = new Uint8Array(size * size);
+    const columns = 8;
+    const rows = 8;
+    const mortarWidth = 0.065;
+
+    for (let y = 0; y < size; y += 1) {
+      const v = y / size;
+      const row = Math.floor(v * rows);
+
+      for (let x = 0; x < size; x += 1) {
+        const u = x / size;
+        const shiftedU = u + (row % 2) * 0.5 / columns;
+        const brickU = fract(shiftedU * columns);
+        const brickV = fract(v * rows);
+        const edgeDistance = Math.min(brickU, 1 - brickU, brickV, 1 - brickV);
+        const brickFace = smoothstep(mortarWidth, mortarWidth * 1.9, edgeDistance);
+        const bevel = smoothstep(mortarWidth, 0.5, edgeDistance);
+        const noise = Math.sin((x * 12.9898 + y * 78.233) * 0.09) * 0.035;
+        const height = clamp(0.14 + brickFace * (0.72 + bevel * 0.16) + noise, 0, 1);
+
+        pixels[y * size + x] = Math.round(height * 255);
+      }
+    }
+
+    const texture = gl.createTexture();
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.LUMINANCE,
+      size,
+      size,
+      0,
+      gl.LUMINANCE,
+      gl.UNSIGNED_BYTE,
+      pixels
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
@@ -353,6 +483,20 @@
     }
 
     return "";
+  }
+
+  function fract(value) {
+    return value - Math.floor(value);
+  }
+
+  function smoothstep(edge0, edge1, value) {
+    const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+
+    return t * t * (3 - 2 * t);
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
   }
 
   function mat4Create() {
