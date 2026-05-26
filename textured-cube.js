@@ -2,7 +2,7 @@
  * Purpose: Shared WebGL textured cube renderer used by the main demo and the
  * benchmark GPU warm-up panel.
  * Processing blocks:
- * - Load the cube GLSL shaders and upload the shared cube geometry/tangent basis.
+ * - Load the cube GLSL shaders and upload a pre-tessellated cube geometry/tangent basis.
  * - Maintain model/view/projection matrices, lighting uniforms, material state, and texture maps.
  * - Draw one or many passes of the same lit rotating stone cube.
  */
@@ -14,56 +14,16 @@
     vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=material-maps"),
     fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=material-maps"),
   };
-  const CUBE_GEOMETRY = {
-    positions: new Float32Array([
-      -1, -1,  1,  1, -1,  1,  1,  1,  1, -1,  1,  1,
-       1, -1, -1, -1, -1, -1, -1,  1, -1,  1,  1, -1,
-      -1,  1,  1,  1,  1,  1,  1,  1, -1, -1,  1, -1,
-      -1, -1, -1,  1, -1, -1,  1, -1,  1, -1, -1,  1,
-       1, -1,  1,  1, -1, -1,  1,  1, -1,  1,  1,  1,
-      -1, -1, -1, -1, -1,  1, -1,  1,  1, -1,  1, -1,
-    ]),
-    normals: new Float32Array([
-       0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,
-       0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,
-       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
-       0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,
-       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
-      -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0,
-    ]),
-    tangents: new Float32Array([
-       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
-      -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0,
-       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
-       1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
-       0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,
-       0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,
-    ]),
-    bitangents: new Float32Array([
-       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
-       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
-       0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,
-       0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,
-       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
-       0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
-    ]),
-    texCoords: new Float32Array([
-      0, 0, 1, 0, 1, 1, 0, 1,
-      0, 0, 1, 0, 1, 1, 0, 1,
-      0, 0, 1, 0, 1, 1, 0, 1,
-      0, 0, 1, 0, 1, 1, 0, 1,
-      0, 0, 1, 0, 1, 1, 0, 1,
-      0, 0, 1, 0, 1, 1, 0, 1,
-    ]),
-    indices: new Uint16Array([
-       0,  1,  2,   0,  2,  3,
-       4,  5,  6,   4,  6,  7,
-       8,  9, 10,   8, 10, 11,
-      12, 13, 14,  12, 14, 15,
-      16, 17, 18,  16, 18, 19,
-      20, 21, 22,  20, 22, 23,
-    ]),
-  };
+  const DEFAULT_TESSELLATION_SEGMENTS = 64;
+  const DEFAULT_GEOMETRY_DISPLACEMENT_SCALE = 0.28;
+  const FACE_DEFINITIONS = [
+    { origin: [-1, -1,  1], uAxis: [ 2, 0,  0], vAxis: [0, 2,  0], normal: [ 0,  0,  1] },
+    { origin: [ 1, -1, -1], uAxis: [-2, 0,  0], vAxis: [0, 2,  0], normal: [ 0,  0, -1] },
+    { origin: [-1,  1,  1], uAxis: [ 2, 0,  0], vAxis: [0, 0, -2], normal: [ 0,  1,  0] },
+    { origin: [-1, -1, -1], uAxis: [ 2, 0,  0], vAxis: [0, 0,  2], normal: [ 0, -1,  0] },
+    { origin: [ 1, -1,  1], uAxis: [ 0, 0, -2], vAxis: [0, 2,  0], normal: [ 1,  0,  0] },
+    { origin: [-1, -1, -1], uAxis: [ 0, 0,  2], vAxis: [0, 2,  0], normal: [-1,  0,  0] },
+  ];
   const MATERIAL_PRESETS = {
     matte: {
       specularStrength: 0.06,
@@ -90,13 +50,25 @@
       this.options = options || {};
       this.program = createProgram(gl, shaderSources.vertex, shaderSources.fragment);
       this.locations = createLocations(gl, this.program);
-      this.positionBuffer = bindAttribute(gl, this.locations.position, CUBE_GEOMETRY.positions, 3);
-      this.normalBuffer = bindAttribute(gl, this.locations.normal, CUBE_GEOMETRY.normals, 3);
-      this.tangentBuffer = bindAttribute(gl, this.locations.tangent, CUBE_GEOMETRY.tangents, 3);
-      this.bitangentBuffer = bindAttribute(gl, this.locations.bitangent, CUBE_GEOMETRY.bitangents, 3);
-      this.texCoordBuffer = bindAttribute(gl, this.locations.texCoord, CUBE_GEOMETRY.texCoords, 2);
-      this.indexBuffer = createIndexBuffer(gl, CUBE_GEOMETRY.indices);
-      this.indexCount = CUBE_GEOMETRY.indices.length;
+      this.tessellationSegments = clampInteger(
+        this.options.tessellationSegments,
+        1,
+        96,
+        DEFAULT_TESSELLATION_SEGMENTS
+      );
+      this.geometryDisplacementScale = Number.isFinite(this.options.geometryDisplacementScale)
+        ? this.options.geometryDisplacementScale
+        : DEFAULT_GEOMETRY_DISPLACEMENT_SCALE;
+      this.heightField = null;
+      this.material = { ...MATERIAL_PRESETS.matte };
+      this.geometryStats = null;
+      this.positionBuffer = gl.createBuffer();
+      this.normalBuffer = gl.createBuffer();
+      this.tangentBuffer = gl.createBuffer();
+      this.bitangentBuffer = gl.createBuffer();
+      this.texCoordBuffer = gl.createBuffer();
+      this.indexBuffer = gl.createBuffer();
+      this.replaceGeometry(this.createGeometry(), gl.STATIC_DRAW);
       this.viewPosition = this.options.eye || [0, 0, 6];
       this.view = mat4LookAt(
         this.viewPosition,
@@ -109,7 +81,6 @@
       this.heightTexture = createSolidTexture(gl, [128, 128, 128, 255], 1);
       this.specularTexture = createSolidTexture(gl, [255, 255, 255, 255], 2);
       this.heightTexelSize = [1, 1];
-      this.material = { ...MATERIAL_PRESETS.matte };
 
       gl.useProgram(this.program);
       gl.uniformMatrix4fv(this.locations.view, false, this.view);
@@ -164,7 +135,7 @@
     async loadMaterialMapsForTexture(textureUrl, options) {
       const mapUrls = createMaterialMapUrls(textureUrl, options);
       const [heightResult] = await Promise.all([
-        loadOptionalMaterialTexture(this.gl, this.heightTexture, mapUrls.height, 1, "height"),
+        loadOptionalHeightMap(this.gl, this.heightTexture, mapUrls.height, 1),
         loadOptionalMaterialTexture(this.gl, this.specularTexture, mapUrls.specular, 2, "specular"),
       ]);
 
@@ -173,6 +144,8 @@
           1 / Math.max(1, heightResult.width),
           1 / Math.max(1, heightResult.height),
         ];
+        this.heightField = heightResult.heightField;
+        this.replaceGeometry(this.createGeometry(), this.gl.DYNAMIC_DRAW);
         this.gl.useProgram(this.program);
         this.gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
       }
@@ -195,11 +168,13 @@
         ...values,
       };
 
+      this.replaceGeometry(this.createGeometry(), this.gl.DYNAMIC_DRAW);
       this.applyMaterialUniforms();
     }
 
     setHeightStrength(heightStrength) {
       this.material.heightStrength = clamp(Number(heightStrength), 0, 1);
+      this.replaceGeometry(this.createGeometry(), this.gl.DYNAMIC_DRAW);
       this.applyMaterialUniforms();
     }
 
@@ -288,6 +263,36 @@
       bindAttributeBuffer(gl, this.locations.texCoord, this.texCoordBuffer, 2);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
     }
+
+    createGeometry() {
+      return createTessellatedCubeGeometry({
+        segments: this.tessellationSegments,
+        heightField: this.heightField,
+        heightStrength: this.material.heightStrength,
+        displacementScale: this.geometryDisplacementScale,
+      });
+    }
+
+    replaceGeometry(geometry, usage) {
+      const gl = this.gl;
+      const bufferUsage = usage || gl.STATIC_DRAW;
+
+      uploadArrayBuffer(gl, this.positionBuffer, geometry.positions, bufferUsage);
+      uploadArrayBuffer(gl, this.normalBuffer, geometry.normals, bufferUsage);
+      uploadArrayBuffer(gl, this.tangentBuffer, geometry.tangents, bufferUsage);
+      uploadArrayBuffer(gl, this.bitangentBuffer, geometry.bitangents, bufferUsage);
+      uploadArrayBuffer(gl, this.texCoordBuffer, geometry.texCoords, bufferUsage);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geometry.indices, bufferUsage);
+      this.indexCount = geometry.indices.length;
+      this.geometryStats = {
+        displaced: Boolean(this.heightField),
+        displacementScale: this.geometryDisplacementScale,
+        indexCount: geometry.indices.length,
+        segments: this.tessellationSegments,
+        vertexCount: geometry.positions.length / 3,
+      };
+    }
   }
 
   async function loadShaderPair(urls) {
@@ -372,14 +377,70 @@
     return shader;
   }
 
-  function bindAttribute(gl, location, data, size) {
-    const buffer = gl.createBuffer();
+  function createTessellatedCubeGeometry(options) {
+    const segments = options.segments;
+    const heightField = options.heightField;
+    const heightStrength = Number.isFinite(options.heightStrength) ? options.heightStrength : 0;
+    const displacementScale = Number.isFinite(options.displacementScale) ? options.displacementScale : 0;
+    const positions = [];
+    const normals = [];
+    const tangents = [];
+    const bitangents = [];
+    const texCoords = [];
+    const indices = [];
+    const faceStride = segments + 1;
+    const displacementAmount = heightField ? displacementScale * heightStrength : 0;
 
+    FACE_DEFINITIONS.forEach((face) => {
+      const baseIndex = positions.length / 3;
+      const tangent = normalize(face.uAxis);
+      const bitangent = normalize(face.vAxis);
+
+      for (let row = 0; row <= segments; row += 1) {
+        const v = row / segments;
+
+        for (let column = 0; column <= segments; column += 1) {
+          const u = column / segments;
+          const heightSample = heightField ? sampleHeightField(heightField, u, v) : 0.5;
+          const displacement = (heightSample - 0.5) * displacementAmount;
+
+          positions.push(
+            face.origin[0] + face.uAxis[0] * u + face.vAxis[0] * v + face.normal[0] * displacement,
+            face.origin[1] + face.uAxis[1] * u + face.vAxis[1] * v + face.normal[1] * displacement,
+            face.origin[2] + face.uAxis[2] * u + face.vAxis[2] * v + face.normal[2] * displacement
+          );
+          normals.push(face.normal[0], face.normal[1], face.normal[2]);
+          tangents.push(tangent[0], tangent[1], tangent[2]);
+          bitangents.push(bitangent[0], bitangent[1], bitangent[2]);
+          texCoords.push(u, v);
+        }
+      }
+
+      for (let row = 0; row < segments; row += 1) {
+        for (let column = 0; column < segments; column += 1) {
+          const topLeft = baseIndex + row * faceStride + column;
+          const topRight = topLeft + 1;
+          const bottomLeft = baseIndex + (row + 1) * faceStride + column;
+          const bottomRight = bottomLeft + 1;
+
+          indices.push(topLeft, topRight, bottomRight, topLeft, bottomRight, bottomLeft);
+        }
+      }
+    });
+
+    return {
+      positions: new Float32Array(positions),
+      normals: new Float32Array(normals),
+      tangents: new Float32Array(tangents),
+      bitangents: new Float32Array(bitangents),
+      texCoords: new Float32Array(texCoords),
+      indices: new Uint16Array(indices),
+    };
+  }
+
+  function uploadArrayBuffer(gl, buffer, data, usage) {
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    bindAttributeBuffer(gl, location, buffer, size);
-
-    return buffer;
+    gl.bufferData(gl.ARRAY_BUFFER, data, usage);
   }
 
   function bindAttributeBuffer(gl, location, buffer, size) {
@@ -390,15 +451,6 @@
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
-  }
-
-  function createIndexBuffer(gl, indices) {
-    const indexBuffer = gl.createBuffer();
-
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-
-    return indexBuffer;
   }
 
   function createSolidTexture(gl, color, unit) {
@@ -427,6 +479,11 @@
 
   async function loadImageTexture(gl, texture, url, unit, options) {
     const image = await loadImage(resolveProjectUrl(url));
+
+    return uploadImageTexture(gl, texture, image, unit, options);
+  }
+
+  function uploadImageTexture(gl, texture, image, unit, options) {
     const uploadOptions = options || {};
 
     gl.activeTexture(gl.TEXTURE0 + unit);
@@ -445,6 +502,29 @@
     };
   }
 
+  async function loadOptionalHeightMap(gl, texture, url, unit) {
+    if (!url) {
+      return null;
+    }
+
+    try {
+      return await loadHeightMap(gl, texture, url, unit);
+    } catch (error) {
+      console.warn(`Failed to load height map ${url}; keeping placeholder texture.`, error);
+      return null;
+    }
+  }
+
+  async function loadHeightMap(gl, texture, url, unit) {
+    const image = await loadImage(resolveProjectUrl(url));
+    const textureInfo = uploadImageTexture(gl, texture, image, unit, { flipY: true });
+
+    return {
+      ...textureInfo,
+      heightField: createHeightFieldFromImage(image),
+    };
+  }
+
   async function loadOptionalMaterialTexture(gl, texture, url, unit, label) {
     if (!url) {
       return null;
@@ -456,6 +536,65 @@
       console.warn(`Failed to load ${label} map ${url}; keeping placeholder texture.`, error);
       return null;
     }
+  }
+
+  function createHeightFieldFromImage(image) {
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    const canvas = document.createElement("canvas");
+
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!context) {
+      return null;
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+
+    const pixels = context.getImageData(0, 0, width, height).data;
+    const values = new Float32Array(width * height);
+
+    for (let source = 0, target = 0; source < pixels.length; source += 4, target += 1) {
+      values[target] = pixels[source] / 255;
+    }
+
+    return { width, height, values };
+  }
+
+  function sampleHeightField(heightField, u, v) {
+    if (!heightField || !heightField.values.length) {
+      return 0.5;
+    }
+
+    const x = clamp(u, 0, 1) * (heightField.width - 1);
+    const y = (1 - clamp(v, 0, 1)) * (heightField.height - 1);
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const x1 = Math.min(heightField.width - 1, x0 + 1);
+    const y1 = Math.min(heightField.height - 1, y0 + 1);
+    const tx = x - x0;
+    const ty = y - y0;
+    const topOffset = y0 * heightField.width;
+    const bottomOffset = y1 * heightField.width;
+    const top = lerp(
+      heightField.values[topOffset + x0],
+      heightField.values[topOffset + x1],
+      tx
+    );
+    const bottom = lerp(
+      heightField.values[bottomOffset + x0],
+      heightField.values[bottomOffset + x1],
+      tx
+    );
+
+    return lerp(top, bottom, ty);
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
   }
 
   function createMaterialMapUrls(textureUrl, options) {
@@ -527,6 +666,16 @@
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function clampInteger(value, min, max, fallback) {
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+      return fallback;
+    }
+
+    return Math.round(clamp(numericValue, min, max));
   }
 
   function mat4Create() {
