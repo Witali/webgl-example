@@ -28,12 +28,12 @@
     matte: {
       specularStrength: 0.06,
       shininess: 10,
-      heightStrength: 0.6,
+      heightStrength: 0.2,
     },
     glossy: {
       specularStrength: 0.78,
       shininess: 72,
-      heightStrength: 0.48,
+      heightStrength: 0.2,
     },
   };
   class TexturedCubeRenderer {
