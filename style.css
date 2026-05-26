@@ -13,6 +13,16 @@ canvas {
   height: 100vh;
 }
 
+#gl-canvas {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+#gl-canvas.is-dragging {
+  cursor: grabbing;
+}
+
 .back-link {
   position: fixed;
   top: 12px;

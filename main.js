@@ -3,7 +3,7 @@
  * Processing blocks:
  * - Create the shared textured cube renderer.
  * - Load the stone texture through the shared texture path.
- * - Run the animation loop and update the FPS counter.
+ * - Run the animation loop, pointer controls, and FPS counter.
  */
 "use strict";
 
@@ -17,6 +17,18 @@ const fpsState = {
   frameCount: 0,
   lastUpdateTime: 0,
 };
+const cubeMotionState = {
+  running: true,
+  angleX: 0,
+  angleY: 0,
+  lastFrameTime: 0,
+  drag: null,
+  suppressNextClick: false,
+};
+const AUTO_ROTATE_X_SPEED = 0.0007;
+const AUTO_ROTATE_Y_SPEED = 0.001;
+const POINTER_ROTATE_SPEED = 0.01;
+const CLICK_DRAG_THRESHOLD = 4;
 let cubeRenderer = null;
 
 if (!gl) {
@@ -32,19 +44,37 @@ start().catch((error) => {
 async function start() {
   cubeRenderer = await TexturedCubeRenderer.create(gl);
   window.__texturedCubeRenderer = cubeRenderer;
+  window.__cubeMotionState = cubeMotionState;
   initializeMaterialControls();
+  initializeCubePointerControls();
   cubeRenderer.loadTexture("assets/stone-texture-wic.jpg");
   requestAnimationFrame(render);
 }
 
 function render(time) {
+  updateCubeAngles(time);
   updateFpsCounter(time);
   cubeRenderer.draw({
-    angleY: time * 0.001,
-    angleX: time * 0.0007,
+    angleY: cubeMotionState.angleY,
+    angleX: cubeMotionState.angleX,
     resizeToDisplaySize: true,
   });
   requestAnimationFrame(render);
+}
+
+function updateCubeAngles(time) {
+  const elapsed = cubeMotionState.lastFrameTime
+    ? Math.min(64, time - cubeMotionState.lastFrameTime)
+    : 0;
+
+  cubeMotionState.lastFrameTime = time;
+
+  if (!cubeMotionState.running || cubeMotionState.drag) {
+    return;
+  }
+
+  cubeMotionState.angleY += elapsed * AUTO_ROTATE_Y_SPEED;
+  cubeMotionState.angleX += elapsed * AUTO_ROTATE_X_SPEED;
 }
 
 function updateFpsCounter(time) {
@@ -81,6 +111,88 @@ function initializeMaterialControls() {
     updateHeightStrengthLabel();
   });
   applySelectedMaterial();
+}
+
+function initializeCubePointerControls() {
+  canvas.addEventListener("click", () => {
+    if (cubeMotionState.suppressNextClick) {
+      cubeMotionState.suppressNextClick = false;
+      return;
+    }
+
+    cubeMotionState.running = !cubeMotionState.running;
+    cubeMotionState.lastFrameTime = 0;
+  });
+  canvas.addEventListener("pointerdown", startCubeDrag);
+  canvas.addEventListener("pointermove", updateCubeDrag);
+  canvas.addEventListener("pointerup", finishCubeDrag);
+  canvas.addEventListener("pointercancel", finishCubeDrag);
+  canvas.addEventListener("lostpointercapture", () => {
+    cubeMotionState.drag = null;
+    canvas.classList.remove("is-dragging");
+  });
+}
+
+function startCubeDrag(event) {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+
+  if (canvas.setPointerCapture) {
+    try {
+      canvas.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Synthetic pointer events used by tests may not have a capturable pointer.
+    }
+  }
+
+  canvas.classList.add("is-dragging");
+  cubeMotionState.drag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    angleX: cubeMotionState.angleX,
+    angleY: cubeMotionState.angleY,
+    moved: false,
+  };
+}
+
+function updateCubeDrag(event) {
+  const drag = cubeMotionState.drag;
+
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+
+  const deltaX = event.clientX - drag.startX;
+  const deltaY = event.clientY - drag.startY;
+
+  if (Math.hypot(deltaX, deltaY) >= CLICK_DRAG_THRESHOLD) {
+    drag.moved = true;
+  }
+
+  cubeMotionState.angleY = drag.angleY + deltaX * POINTER_ROTATE_SPEED;
+  cubeMotionState.angleX = drag.angleX + deltaY * POINTER_ROTATE_SPEED;
+}
+
+function finishCubeDrag(event) {
+  const drag = cubeMotionState.drag;
+
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  cubeMotionState.drag = null;
+  cubeMotionState.suppressNextClick = drag.moved;
+  canvas.classList.remove("is-dragging");
+
+  if (canvas.hasPointerCapture && canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
 }
 
 function applySelectedMaterial() {
