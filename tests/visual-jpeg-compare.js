@@ -52,8 +52,9 @@ const params = new URLSearchParams(window.location.search);
 const comparisonCanvases = [browserCanvas, libraryCanvas, diffCanvas];
 const comparisonZoomState = {
   scale: 1,
-  originX: 50,
-  originY: 50,
+  panX: 0,
+  panY: 0,
+  drag: null,
 };
 
 if (params.get("decoder")) {
@@ -412,7 +413,7 @@ function drawPixels(canvas, image) {
   context.putImageData(new ImageData(image.pixels, image.width, image.height), 0, 0);
 }
 
-// Synchronized wheel zoom applies the same scale/origin to source, decoded, and diff canvases.
+// Synchronized viewport controls keep zoom and pan aligned across source, decoded, and diff canvases.
 function initializeCanvasZoom() {
   comparisonCanvases.forEach((canvas) => {
     const viewport = document.createElement("div");
@@ -426,42 +427,145 @@ function initializeCanvasZoom() {
 
     viewport.addEventListener("wheel", (event) => {
       event.preventDefault();
-      updateCanvasZoomFromWheel(viewport, event);
+      updateCanvasViewportFromWheel(viewport, event);
     }, { passive: false });
+    viewport.addEventListener("pointerdown", (event) => {
+      startCanvasDrag(viewport, event);
+    });
+    viewport.addEventListener("pointermove", (event) => {
+      updateCanvasDrag(viewport, event);
+    });
+    viewport.addEventListener("pointerup", (event) => {
+      finishCanvasDrag(viewport, event);
+    });
+    viewport.addEventListener("pointercancel", (event) => {
+      finishCanvasDrag(viewport, event);
+    });
+    viewport.addEventListener("lostpointercapture", () => {
+      comparisonZoomState.drag = null;
+      viewport.classList.remove("is-dragging");
+    });
   });
+}
+
+function updateCanvasViewportFromWheel(viewport, event) {
+  if (event.ctrlKey) {
+    updateCanvasZoomFromWheel(viewport, event);
+    return;
+  }
+
+  const delta = normalizeWheelDelta(event);
+
+  if (event.shiftKey) {
+    comparisonZoomState.panX -= delta.x || delta.y;
+  } else {
+    comparisonZoomState.panY -= delta.y;
+  }
+
+  clampCanvasPan(viewport, comparisonZoomState);
+  applyComparisonCanvasZoom();
 }
 
 function updateCanvasZoomFromWheel(viewport, event) {
   const rect = viewport.getBoundingClientRect();
   const wheelSteps = Math.max(-4, Math.min(4, -event.deltaY / 100));
+  const previousScale = comparisonZoomState.scale;
 
   if (rect.width <= 0 || rect.height <= 0 || wheelSteps === 0) {
     return;
   }
 
-  comparisonZoomState.originX = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100));
-  comparisonZoomState.originY = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100));
+  const pointerX = event.clientX - rect.left;
+  const pointerY = event.clientY - rect.top;
+  const imageX = (pointerX - comparisonZoomState.panX) / previousScale;
+  const imageY = (pointerY - comparisonZoomState.panY) / previousScale;
+
   comparisonZoomState.scale = Math.max(
     MIN_IMAGE_ZOOM,
     Math.min(MAX_IMAGE_ZOOM, comparisonZoomState.scale * Math.pow(WHEEL_ZOOM_STEP, wheelSteps))
   );
+  comparisonZoomState.panX = pointerX - imageX * comparisonZoomState.scale;
+  comparisonZoomState.panY = pointerY - imageY * comparisonZoomState.scale;
 
   if (comparisonZoomState.scale === MIN_IMAGE_ZOOM) {
-    comparisonZoomState.originX = 50;
-    comparisonZoomState.originY = 50;
+    comparisonZoomState.panX = 0;
+    comparisonZoomState.panY = 0;
   }
 
+  clampCanvasPan(viewport, comparisonZoomState);
   applyComparisonCanvasZoom();
+}
+
+function startCanvasDrag(viewport, event) {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  viewport.focus({ preventScroll: true });
+
+  if (viewport.setPointerCapture) {
+    try {
+      viewport.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Synthetic test events do not always have an active pointer capture target.
+    }
+  }
+
+  viewport.classList.add("is-dragging");
+  comparisonZoomState.drag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    panX: comparisonZoomState.panX,
+    panY: comparisonZoomState.panY,
+  };
+}
+
+function updateCanvasDrag(viewport, event) {
+  const drag = comparisonZoomState.drag;
+
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  comparisonZoomState.panX = drag.panX + event.clientX - drag.startX;
+  comparisonZoomState.panY = drag.panY + event.clientY - drag.startY;
+  clampCanvasPan(viewport, comparisonZoomState);
+  applyComparisonCanvasZoom();
+}
+
+function finishCanvasDrag(viewport, event) {
+  const drag = comparisonZoomState.drag;
+
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  comparisonZoomState.drag = null;
+  viewport.classList.remove("is-dragging");
+
+  if (viewport.hasPointerCapture && viewport.hasPointerCapture(event.pointerId)) {
+    viewport.releasePointerCapture(event.pointerId);
+  }
 }
 
 function resetAllCanvasZoom() {
   comparisonZoomState.scale = 1;
-  comparisonZoomState.originX = 50;
-  comparisonZoomState.originY = 50;
+  comparisonZoomState.panX = 0;
+  comparisonZoomState.panY = 0;
+  comparisonZoomState.drag = null;
   applyComparisonCanvasZoom();
 }
 
 function applyComparisonCanvasZoom() {
+  const viewport = comparisonCanvases[0] && comparisonCanvases[0].parentElement;
+
+  if (viewport) {
+    clampCanvasPan(viewport, comparisonZoomState);
+  }
+
   comparisonCanvases.forEach((canvas) => {
     applyCanvasZoom(canvas, comparisonZoomState);
   });
@@ -469,8 +573,41 @@ function applyComparisonCanvasZoom() {
 
 function applyCanvasZoom(canvas, state) {
   canvas.style.setProperty("--image-zoom", state.scale.toFixed(3));
-  canvas.style.setProperty("--image-zoom-origin-x", `${state.originX.toFixed(2)}%`);
-  canvas.style.setProperty("--image-zoom-origin-y", `${state.originY.toFixed(2)}%`);
+  canvas.style.setProperty("--image-pan-x", `${state.panX.toFixed(2)}px`);
+  canvas.style.setProperty("--image-pan-y", `${state.panY.toFixed(2)}px`);
+}
+
+function clampCanvasPan(viewport, state) {
+  const rect = viewport.getBoundingClientRect();
+
+  if (state.scale <= MIN_IMAGE_ZOOM || rect.width <= 0 || rect.height <= 0) {
+    state.panX = 0;
+    state.panY = 0;
+    return;
+  }
+
+  const minPanX = rect.width * (1 - state.scale);
+  const minPanY = rect.height * (1 - state.scale);
+
+  state.panX = clamp(state.panX, minPanX, 0);
+  state.panY = clamp(state.panY, minPanY, 0);
+}
+
+function normalizeWheelDelta(event) {
+  const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? 240
+      : 1;
+
+  return {
+    x: event.deltaX * multiplier,
+    y: event.deltaY * multiplier,
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 // Pixel comparison renders a magnified diff image and records aggregate mismatch metrics.

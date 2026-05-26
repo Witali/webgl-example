@@ -214,6 +214,13 @@ figcaption {
   background-color: #13171d;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-size: 16px 16px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.canvas-viewport.is-dragging {
+  cursor: grabbing;
 }
 
 canvas {
@@ -222,9 +229,10 @@ canvas {
   height: 100%;
   image-rendering: pixelated;
   background-color: transparent;
-  cursor: zoom-in;
-  transform: scale(var(--image-zoom, 1));
-  transform-origin: var(--image-zoom-origin-x, 50%) var(--image-zoom-origin-y, 50%);
+  cursor: inherit;
+  pointer-events: none;
+  transform: translate(var(--image-pan-x, 0), var(--image-pan-y, 0)) scale(var(--image-zoom, 1));
+  transform-origin: 0 0;
 }
 
 .canvas-viewport:focus-visible {
