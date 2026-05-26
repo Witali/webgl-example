@@ -176,7 +176,7 @@ function updateCubeDrag(event) {
   }
 
   cubeMotionState.angleY = drag.angleY + deltaX * POINTER_ROTATE_SPEED;
-  cubeMotionState.angleX = drag.angleX + deltaY * POINTER_ROTATE_SPEED;
+  cubeMotionState.angleX = drag.angleX - deltaY * POINTER_ROTATE_SPEED;
 }
 
 function finishCubeDrag(event) {
