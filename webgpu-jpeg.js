@@ -27,13 +27,6 @@
   const HUFFMAN_TABLE_SLOTS = 8;
   const HUFFMAN_CODE_LENGTHS = 17;
   const HUFFMAN_SYMBOL_STRIDE = 256;
-  const HUFFMAN_FAST_BITS = 10;
-  const HUFFMAN_FAST_SIZE = 1 << HUFFMAN_FAST_BITS;
-  const HUFFMAN_FAST_LENGTH_OFFSET = HUFFMAN_TABLE_SLOTS * HUFFMAN_SYMBOL_STRIDE;
-  const HUFFMAN_FAST_SYMBOL_OFFSET =
-    HUFFMAN_FAST_LENGTH_OFFSET + HUFFMAN_TABLE_SLOTS * HUFFMAN_FAST_SIZE;
-  const HUFFMAN_SYMBOL_BUFFER_LENGTH =
-    HUFFMAN_FAST_SYMBOL_OFFSET + HUFFMAN_TABLE_SLOTS * HUFFMAN_FAST_SIZE;
   const META_PARAM_OFFSET = 0;
   const META_QUANT_OFFSET = 16;
   const META_COMPONENT_OFFSET = META_QUANT_OFFSET + 4 * 64;
@@ -61,10 +54,6 @@
       58u, 59u, 52u, 45u, 38u, 31u, 39u, 46u,
       53u, 60u, 61u, 54u, 47u, 55u, 62u, 63u
     );
-    const HUFFMAN_FAST_BITS = 10u;
-    const HUFFMAN_FAST_SIZE = 1024u;
-    const HUFFMAN_FAST_LENGTH_OFFSET = 2048u;
-    const HUFFMAN_FAST_SYMBOL_OFFSET = 10240u;
 
     var<private> entropyOffset: u32;
     var<private> entropyEnd: u32;
@@ -132,58 +121,27 @@
       }
     }
 
-    fn bitMask(count: u32) -> u32 {
-      if (count == 0u) {
-        return 0u;
+    fn readBit() -> u32 {
+      if (bitCount == 0u) {
+        bitBuffer = readEntropyByte();
+        bitCount = 8u;
       }
 
-      return (1u << count) - 1u;
-    }
-
-    fn ensureBits(count: u32) {
-      loop {
-        if (bitCount >= count) {
-          break;
-        }
-
-        bitBuffer = (bitBuffer << 8u) | readEntropyByte();
-        bitCount = bitCount + 8u;
-      }
-    }
-
-    fn peekBits(count: u32) -> u32 {
-      ensureBits(count);
-
-      return (bitBuffer >> (bitCount - count)) & bitMask(count);
-    }
-
-    fn skipBits(count: u32) {
-      bitCount = bitCount - count;
-      bitBuffer = bitBuffer & bitMask(bitCount);
+      bitCount = bitCount - 1u;
+      return (bitBuffer >> bitCount) & 1u;
     }
 
     fn readBits(count: u32) -> u32 {
-      let value = peekBits(count);
+      var value = 0u;
 
-      skipBits(count);
+      for (var index = 0u; index < count; index = index + 1u) {
+        value = (value << 1u) | readBit();
+      }
 
       return value;
     }
 
-    fn readBit() -> u32 {
-      return readBits(1u);
-    }
-
     fn decodeHuffman(slot: u32) -> u32 {
-      let fastCode = peekBits(HUFFMAN_FAST_BITS);
-      let fastBase = slot * HUFFMAN_FAST_SIZE + fastCode;
-      let fastLength = u32(huffSymbols[HUFFMAN_FAST_LENGTH_OFFSET + fastBase]);
-
-      if (fastLength > 0u) {
-        skipBits(fastLength);
-        return u32(huffSymbols[HUFFMAN_FAST_SYMBOL_OFFSET + fastBase]);
-      }
-
       var code = 0i;
       let tableBase = slot * 17u;
 
@@ -370,10 +328,6 @@
       58u, 59u, 52u, 45u, 38u, 31u, 39u, 46u,
       53u, 60u, 61u, 54u, 47u, 55u, 62u, 63u
     );
-    const HUFFMAN_FAST_BITS = 10u;
-    const HUFFMAN_FAST_SIZE = 1024u;
-    const HUFFMAN_FAST_LENGTH_OFFSET = 2048u;
-    const HUFFMAN_FAST_SYMBOL_OFFSET = 10240u;
 
     var<private> entropyOffset: u32;
     var<private> entropyEnd: u32;
@@ -396,14 +350,6 @@
       return blockTasks[taskIndex * 8u + field];
     }
 
-    fn bitMask(count: u32) -> u32 {
-      if (count == 0u) {
-        return 0u;
-      }
-
-      return (1u << count) - 1u;
-    }
-
     fn initializeReader(byteOffset: u32, bitOffset: u32, endOffset: u32) {
       entropyOffset = byteOffset;
       entropyEnd = endOffset;
@@ -411,7 +357,7 @@
       bitCount = 0u;
 
       if (bitOffset > 0u && byteOffset < entropyEnd) {
-        bitBuffer = jpegBytes[byteOffset] & bitMask(8u - bitOffset);
+        bitBuffer = jpegBytes[byteOffset];
         entropyOffset = byteOffset + 1u;
 
         if (bitBuffer == 255u && entropyOffset < entropyEnd && jpegBytes[entropyOffset] == 0u) {
@@ -464,50 +410,27 @@
       }
     }
 
-    fn ensureBits(count: u32) {
-      loop {
-        if (bitCount >= count) {
-          break;
-        }
-
-        bitBuffer = (bitBuffer << 8u) | readEntropyByte();
-        bitCount = bitCount + 8u;
+    fn readBit() -> u32 {
+      if (bitCount == 0u) {
+        bitBuffer = readEntropyByte();
+        bitCount = 8u;
       }
-    }
 
-    fn peekBits(count: u32) -> u32 {
-      ensureBits(count);
-
-      return (bitBuffer >> (bitCount - count)) & bitMask(count);
-    }
-
-    fn skipBits(count: u32) {
-      bitCount = bitCount - count;
-      bitBuffer = bitBuffer & bitMask(bitCount);
+      bitCount = bitCount - 1u;
+      return (bitBuffer >> bitCount) & 1u;
     }
 
     fn readBits(count: u32) -> u32 {
-      let value = peekBits(count);
+      var value = 0u;
 
-      skipBits(count);
+      for (var index = 0u; index < count; index = index + 1u) {
+        value = (value << 1u) | readBit();
+      }
 
       return value;
     }
 
-    fn readBit() -> u32 {
-      return readBits(1u);
-    }
-
     fn decodeHuffman(slot: u32) -> u32 {
-      let fastCode = peekBits(HUFFMAN_FAST_BITS);
-      let fastBase = slot * HUFFMAN_FAST_SIZE + fastCode;
-      let fastLength = u32(huffSymbols[HUFFMAN_FAST_LENGTH_OFFSET + fastBase]);
-
-      if (fastLength > 0u) {
-        skipBits(fastLength);
-        return u32(huffSymbols[HUFFMAN_FAST_SYMBOL_OFFSET + fastBase]);
-      }
-
       var code = 0i;
       let tableBase = slot * 17u;
 
@@ -1751,7 +1674,7 @@
     const min = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
     const max = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
     const valOffset = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_CODE_LENGTHS);
-    const symbols = new Int32Array(HUFFMAN_SYMBOL_BUFFER_LENGTH);
+    const symbols = new Int32Array(HUFFMAN_TABLE_SLOTS * HUFFMAN_SYMBOL_STRIDE);
 
     max.fill(-1);
 
@@ -1775,25 +1698,6 @@
             min[base + length] = code;
             max[base + length] = code + count - 1;
             valOffset[base + length] = symbolIndex - code;
-
-            if (length <= HUFFMAN_FAST_BITS) {
-              for (let offset = 0; offset < count; offset += 1) {
-                const huffmanCode = code + offset;
-                const fastStart = huffmanCode << (HUFFMAN_FAST_BITS - length);
-                const fastEnd = fastStart + (1 << (HUFFMAN_FAST_BITS - length));
-                const symbol = table.symbols[symbolIndex + offset];
-
-                for (let fastCode = fastStart; fastCode < fastEnd; fastCode += 1) {
-                  symbols[
-                    HUFFMAN_FAST_LENGTH_OFFSET + slot * HUFFMAN_FAST_SIZE + fastCode
-                  ] = length;
-                  symbols[
-                    HUFFMAN_FAST_SYMBOL_OFFSET + slot * HUFFMAN_FAST_SIZE + fastCode
-                  ] = symbol;
-                }
-              }
-            }
-
             code += count;
             symbolIndex += count;
           }
