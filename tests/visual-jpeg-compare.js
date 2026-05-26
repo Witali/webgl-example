@@ -122,14 +122,16 @@ if (uploadButton && fileInput) {
     runVisualCompare();
   });
 
-  imageInput.addEventListener("change", () => {
-    if (uploadedImageUrl && imageInput.value !== uploadedImageUrl) {
-      releaseUploadedImage();
-    }
-
-    syncDecoderToImage(imageInput.value);
-  });
 }
+
+imageInput.addEventListener("change", () => {
+  if (uploadedImageUrl && imageInput.value !== uploadedImageUrl) {
+    releaseUploadedImage();
+  }
+
+  syncDecoderToImage(imageInput.value);
+  runVisualCompare();
+});
 
 initializeImageSelect().then(runVisualCompare);
 
