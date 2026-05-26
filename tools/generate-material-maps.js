@@ -114,7 +114,8 @@ function createResultExpression(texturePath) {
             const down = luminance[yDown * width + x];
             const center = luminance[texel];
             const gradient = Math.hypot(right - left, down - up) * 0.5;
-            const heightValue = smoothstep(0.04, 0.96, clamp((center - 0.05) / 0.82 + gradient * 0.18, 0, 1));
+            const rawHeight = smoothstep(0.04, 0.96, clamp((center - 0.05) / 0.82 + gradient * 0.18, 0, 1));
+            const heightValue = clamp(0.5 + (rawHeight - 0.5) * 3, 0, 1);
             const specularValue = clamp(0.08 + smoothstep(0.24, 0.88, center) * 0.74 + gradient * 1.2, 0, 1);
             const heightByte = Math.round(heightValue * 255);
             const specularByte = Math.round(specularValue * 255);
