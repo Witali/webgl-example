@@ -74,6 +74,7 @@ async function runBrowserPage(options) {
 
       pollForResult({
         debugPort,
+        emulation: options.emulation,
         pagePath: options.pagePath,
         resultExpression: options.resultExpression,
         snapshotExpression: options.snapshotExpression,
@@ -278,7 +279,12 @@ async function pollForResult(options) {
   const client = await DevToolsWebSocket.connect(target.webSocketDebuggerUrl);
 
   try {
+    await client.send("Page.enable");
     await client.send("Runtime.enable");
+
+    if (options.emulation) {
+      await applyBrowserEmulation(client, options.emulation);
+    }
 
     const deadline = Date.now() + options.timeoutMs;
     let lastSnapshot = null;
@@ -314,6 +320,38 @@ async function pollForResult(options) {
     throw new Error(`Timed out waiting for browser result. Last snapshot: ${JSON.stringify(lastSnapshot)}`);
   } finally {
     client.close();
+  }
+}
+
+async function applyBrowserEmulation(client, emulation) {
+  const width = Number(emulation.width || 390);
+  const height = Number(emulation.height || 844);
+  const deviceScaleFactor = Number(emulation.deviceScaleFactor || 3);
+  const mobile = emulation.mobile !== false;
+
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width,
+    height,
+    deviceScaleFactor,
+    mobile,
+    screenWidth: width,
+    screenHeight: height,
+  });
+  await client.send("Emulation.setTouchEmulationEnabled", {
+    enabled: emulation.touch !== false,
+    maxTouchPoints: Number(emulation.maxTouchPoints || 5),
+  });
+
+  if (emulation.userAgent) {
+    await client.send("Emulation.setUserAgentOverride", {
+      userAgent: emulation.userAgent,
+      platform: emulation.platform || "Android",
+    });
+  }
+
+  if (emulation.reload !== false) {
+    await client.send("Page.reload", { ignoreCache: true });
+    await delay(250);
   }
 }
 

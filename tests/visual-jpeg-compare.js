@@ -4,7 +4,7 @@
  * Processing blocks:
  * - Resolve selected/uploaded images and choose a matching decoder.
  * - Decode with the browser and selected library path.
- * - Draw source/result/diff canvases, synced zoom state, metrics, and timing text.
+ * - Draw source/result/diff canvases, synced zoom state, metrics, and selected decoder timing.
  */
 "use strict";
 
@@ -25,21 +25,25 @@ const metricSize = document.getElementById("metric-size");
 const metricPixels = document.getElementById("metric-pixels");
 const metricMax = document.getElementById("metric-max");
 const metricMean = document.getElementById("metric-mean");
+const decoderTimingSummary = document.getElementById("decoder-timing-summary");
+const decoderTimingBody = document.getElementById("decoder-timing-body");
 
 const DEFAULT_DIFF_SCALE = 16;
-const DEFAULT_IMAGE_URL = "/assets/stone-texture-small.jpg";
+const PAGE_ASSET_PREFIX = "../assets/";
+const WASM_JPEG_IDCT_URL = "../wasm/jpeg-idct.wasm";
+const DEFAULT_IMAGE_URL = `${PAGE_ASSET_PREFIX}stone-texture-small.jpg`;
 const STATIC_ASSET_JPEGS = [
-  "/assets/stone-texture-small.jpg",
-  "/assets/stone-texture-tiny.jpg",
-  "/assets/stone-texture.jpg",
-  "/assets/stone-texture-wic.jpg",
+  `${PAGE_ASSET_PREFIX}stone-texture-small.jpg`,
+  `${PAGE_ASSET_PREFIX}stone-texture-tiny.jpg`,
+  `${PAGE_ASSET_PREFIX}stone-texture.jpg`,
+  `${PAGE_ASSET_PREFIX}stone-texture-wic.jpg`,
 ];
 const MAX_BENCH_ASSET_OPTIONS = 2;
 const ASSET_JPEG_MANIFESTS = [
-  "/assets/benchmark-jpegs/manifest.json",
+  `${PAGE_ASSET_PREFIX}benchmark-jpegs/manifest.json`,
 ];
 const ASSET_WEBP_MANIFESTS = [
-  "/assets/webp-assets/manifest.json",
+  `${PAGE_ASSET_PREFIX}webp-assets/manifest.json`,
 ];
 const MIN_IMAGE_ZOOM = 1;
 const MAX_IMAGE_ZOOM = 12;
@@ -130,12 +134,17 @@ initializeImageSelect().then(runVisualCompare);
 
 // Main comparison path: decode both images, draw canvases, compute diffs, and update status.
 async function runVisualCompare() {
-  const imageUrl = imageInput.value.trim();
+  const imageUrl = normalizePageAssetUrl(imageInput.value.trim());
   const decoder = decoderSelect.value;
+
+  if (imageInput.value !== imageUrl) {
+    imageInput.value = imageUrl;
+  }
 
   try {
     setStatus(`Loading ${imageUrl}`);
     resetMetrics();
+    resetDecoderTiming();
     lastDiffSource = null;
     window.__webGpuResidentTimings = null;
 
@@ -173,10 +182,12 @@ async function runVisualCompare() {
     drawPixels(libraryCanvas, libraryDecoded);
     redrawDiffImage();
     updateMetrics(browserDecoded.width, browserDecoded.height, comparison);
+    updateSelectedDecoderTiming(decoder, libraryDecoded.timings);
     setStatus(
       `Loaded with ${formatDecoderName(decoder)} decoder${formatTimingStatus(libraryDecoded.timings)}`
     );
   } catch (error) {
+    updateSelectedDecoderTiming(decoder, null, formatErrorMessage(error));
     setStatus(error && error.stack ? error.stack : String(error));
   }
 }
@@ -233,7 +244,7 @@ async function decodeWithLibrary(url, decoder) {
 
   if (decoder === "wasm") {
     if (!wasmDecoderPromise) {
-      wasmDecoderPromise = WasmJpegDecoder.create("/wasm/jpeg-idct.wasm");
+      wasmDecoderPromise = WasmJpegDecoder.create(WASM_JPEG_IDCT_URL);
     }
 
     const wasmDecoder = await wasmDecoderPromise;
@@ -303,13 +314,19 @@ async function decodeWithLibrary(url, decoder) {
   let gpuDecoder;
 
   if (decoder === "wasm-gpu") {
-    gpuDecoder = await WasmGpuJpegDecoder.create(gl, "/wasm/jpeg-idct.wasm");
+    gpuDecoder = await WasmGpuJpegDecoder.create(gl, WASM_JPEG_IDCT_URL);
   } else {
     gpuDecoder = await GpuJpegDecoder.create(gl);
   }
 
   const decoded = await gpuDecoder.decodeUrl(url);
+  const timings = { ...decoded.timings };
+  const readbackStarted = performance.now();
   const pixels = readTextureTopLeft(gl, decoded.texture, decoded.width, decoded.height);
+  const readbackMs = performance.now() - readbackStarted;
+
+  timings.readbackMs = (timings.readbackMs || 0) + readbackMs;
+  timings.totalDecoderMs = (timings.totalDecoderMs || 0) + readbackMs;
 
   decoded.dispose();
 
@@ -317,6 +334,7 @@ async function decodeWithLibrary(url, decoder) {
     width: decoded.width,
     height: decoded.height,
     pixels: new Uint8ClampedArray(pixels),
+    timings,
   };
 }
 
@@ -342,10 +360,14 @@ async function decodeWithBrowser(url) {
 function loadImage(url) {
   return new Promise((resolve, reject) => {
     const image = new Image();
+    const resolvedUrl = resolvePageUrl(url);
 
-    image.addEventListener("load", () => resolve(image));
-    image.addEventListener("error", () => reject(new Error(`Failed to decode ${url}`)));
-    image.src = url;
+    image.decoding = "async";
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", () => {
+      reject(new Error(`Failed to load/decode image ${resolvedUrl}`));
+    }, { once: true });
+    image.src = resolvedUrl;
   });
 }
 
@@ -551,6 +573,66 @@ function resetMetrics() {
   metricMean.textContent = "-";
 }
 
+function resetDecoderTiming() {
+  if (decoderTimingSummary) {
+    decoderTimingSummary.textContent = "Waiting";
+  }
+
+  if (decoderTimingBody) {
+    decoderTimingBody.replaceChildren(createDecoderTimingMessageRow("Decode the selected image to collect timing."));
+  }
+}
+
+function updateSelectedDecoderTiming(decoder, timings, errorMessage) {
+  if (!decoderTimingBody) {
+    return;
+  }
+
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("td");
+  const decodeCell = document.createElement("td");
+  const totalCell = document.createElement("td");
+  const statusCell = document.createElement("td");
+  const detailsCell = document.createElement("td");
+
+  nameCell.textContent = formatDecoderName(decoder);
+  decodeCell.textContent = timings ? formatMs(extractDecodeMs(timings)) : "-";
+  totalCell.textContent = timings ? formatMs(extractTotalMs(timings)) : "-";
+  statusCell.textContent = errorMessage ? "Error" : "Done";
+  statusCell.className = errorMessage ? "timing-status-error" : "timing-status-ok";
+  detailsCell.textContent = errorMessage || formatTimingDetails(timings);
+
+  row.append(nameCell, decodeCell, totalCell, statusCell, detailsCell);
+  decoderTimingBody.replaceChildren(row);
+
+  if (decoderTimingSummary) {
+    decoderTimingSummary.textContent = errorMessage
+      ? "Failed"
+      : `${formatDecoderName(decoder)}: ${formatMs(extractDecodeMs(timings))}`;
+  }
+
+  window.__visualSelectedDecoderTiming = {
+    decoder,
+    name: formatDecoderName(decoder),
+    decodeMs: timings ? extractDecodeMs(timings) : null,
+    totalMs: timings ? extractTotalMs(timings) : null,
+    details: detailsCell.textContent,
+    error: errorMessage || null,
+    timings: timings || null,
+  };
+}
+
+function createDecoderTimingMessageRow(message) {
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+
+  cell.colSpan = 5;
+  cell.textContent = message;
+  row.append(cell);
+
+  return row;
+}
+
 function setStatus(message) {
   statusEl.textContent = message;
 }
@@ -611,7 +693,7 @@ function updateDiffScaleLabel() {
 
 // Asset discovery fills the image dropdown from static entries and optional manifests.
 async function initializeImageSelect() {
-  const requestedImage = params.get("image") || DEFAULT_IMAGE_URL;
+  const requestedImage = normalizePageAssetUrl(params.get("image") || DEFAULT_IMAGE_URL);
 
   try {
     assetImageUrls = await loadAssetImageUrls();
@@ -639,24 +721,26 @@ async function initializeImageSelect() {
 }
 
 async function loadAssetImageUrls() {
-  const urls = new Set(STATIC_ASSET_JPEGS);
+  const urls = new Set(STATIC_ASSET_JPEGS.map(normalizePageAssetUrl));
+  const warnings = [];
   let benchAssetCount = 0;
 
-  for (const manifestUrl of ASSET_JPEG_MANIFESTS) {
-    const response = await fetch(manifestUrl);
+  for (const rawManifestUrl of ASSET_JPEG_MANIFESTS) {
+    const manifestUrl = normalizePageAssetUrl(rawManifestUrl);
+    const manifest = await fetchAssetManifest(manifestUrl, warnings);
 
-    if (!response.ok) {
-      throw new Error(`${manifestUrl}: ${response.status}`);
+    if (!manifest) {
+      continue;
     }
 
-    const manifest = await response.json();
-
     manifest.forEach((url) => {
-      if (typeof url !== "string" || !isJpegUrl(url)) {
+      const assetUrl = normalizePageAssetUrl(url);
+
+      if (typeof url !== "string" || !isJpegUrl(assetUrl)) {
         return;
       }
 
-      if (isBenchmarkFixtureUrl(url)) {
+      if (isBenchmarkFixtureUrl(assetUrl)) {
         if (benchAssetCount >= MAX_BENCH_ASSET_OPTIONS) {
           return;
         }
@@ -664,33 +748,66 @@ async function loadAssetImageUrls() {
         benchAssetCount += 1;
       }
 
-      urls.add(url);
+      urls.add(assetUrl);
     });
   }
 
-  for (const manifestUrl of ASSET_WEBP_MANIFESTS) {
-    const response = await fetch(manifestUrl);
+  for (const rawManifestUrl of ASSET_WEBP_MANIFESTS) {
+    const manifestUrl = normalizePageAssetUrl(rawManifestUrl);
+    const manifest = await fetchAssetManifest(manifestUrl, warnings);
 
-    if (!response.ok) {
-      throw new Error(`${manifestUrl}: ${response.status}`);
+    if (!manifest) {
+      continue;
     }
 
-    const manifest = await response.json();
-
     manifest
-      .filter((url) => typeof url === "string" && isWebpUrl(url))
+      .filter((url) => typeof url === "string")
+      .map(normalizePageAssetUrl)
+      .filter((url) => isWebpUrl(url))
       .forEach((url) => urls.add(url));
+  }
+
+  window.__visualAssetWarnings = warnings;
+
+  if (warnings.length > 0) {
+    console.warn("Could not load some visual comparison asset manifests:", warnings);
   }
 
   return Array.from(urls);
 }
 
+async function fetchAssetManifest(manifestUrl, warnings) {
+  try {
+    const response = await fetch(manifestUrl);
+
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+
+    const manifest = await response.json();
+
+    if (!Array.isArray(manifest)) {
+      throw new Error("manifest is not an array");
+    }
+
+    return manifest;
+  } catch (error) {
+    warnings.push(`${manifestUrl}: ${formatErrorMessage(error)}`);
+    return null;
+  }
+}
+
 function addImageOption(url, label) {
   const option = document.createElement("option");
+  const normalizedUrl = normalizePageAssetUrl(url);
 
-  option.value = url;
+  option.value = normalizedUrl;
   option.textContent = label;
   imageInput.append(option);
+}
+
+function formatErrorMessage(error) {
+  return error && error.message ? error.message : String(error);
 }
 
 function formatAssetImageLabel(url) {
@@ -698,7 +815,35 @@ function formatAssetImageLabel(url) {
     return "Uploaded image";
   }
 
-  return url.replace(/^\/?assets\//, "");
+  const normalizedUrl = normalizePageAssetUrl(url);
+  const marker = "/assets/";
+  const assetIndex = normalizedUrl.indexOf(marker);
+
+  if (assetIndex >= 0) {
+    return normalizedUrl.slice(assetIndex + marker.length);
+  }
+
+  return normalizedUrl.replace(/^(?:\.\.\/|\.\/)?assets\//, "");
+}
+
+function normalizePageAssetUrl(url) {
+  if (typeof url !== "string") {
+    return url;
+  }
+
+  if (url.startsWith("/assets/")) {
+    return `${PAGE_ASSET_PREFIX}${url.slice("/assets/".length)}`;
+  }
+
+  if (url.startsWith("assets/")) {
+    return `${PAGE_ASSET_PREFIX}${url.slice("assets/".length)}`;
+  }
+
+  return url;
+}
+
+function resolvePageUrl(url) {
+  return new URL(url, window.location.href).href;
 }
 
 function isJpegUrl(url) {
@@ -768,6 +913,68 @@ function formatDecoderName(decoder) {
     default:
       return "CPU-JS-Huff+GPU-IDCT";
   }
+}
+
+function formatMs(value) {
+  return Number.isFinite(value) ? `${value.toFixed(2)} ms` : "-";
+}
+
+function extractDecodeMs(timings) {
+  if (!timings) {
+    return NaN;
+  }
+
+  if (Number.isFinite(timings.gpuDecodeMs)) {
+    return timings.gpuDecodeMs;
+  }
+
+  if (Number.isFinite(timings.decodeMs)) {
+    return timings.decodeMs;
+  }
+
+  if (Number.isFinite(timings.coreDecodeMs)) {
+    return timings.coreDecodeMs;
+  }
+
+  return timings.totalDecoderMs;
+}
+
+function extractTotalMs(timings) {
+  if (!timings) {
+    return NaN;
+  }
+
+  if (Number.isFinite(timings.totalDecoderMs)) {
+    return timings.totalDecoderMs;
+  }
+
+  if (Number.isFinite(timings.workMs)) {
+    return timings.workMs;
+  }
+
+  return extractDecodeMs(timings);
+}
+
+function formatTimingDetails(timings) {
+  if (!timings) {
+    return "";
+  }
+
+  const parts = [
+    Number.isFinite(timings.parseMs) ? `parse ${formatMs(timings.parseMs)}` : null,
+    Number.isFinite(timings.preScanMs) && timings.preScanMs > 0
+      ? `pre-scan ${formatMs(timings.preScanMs)}`
+      : null,
+    Number.isFinite(timings.uploadMs) && timings.uploadMs > 0
+      ? `upload ${formatMs(timings.uploadMs)}`
+      : null,
+    Number.isFinite(timings.readbackMs) && timings.readbackMs > 0
+      ? `readback ${formatMs(timings.readbackMs)}`
+      : null,
+    timings.timedPhase || null,
+  ].filter(Boolean);
+
+  return parts.join(", ");
 }
 
 function formatTimingStatus(timings) {

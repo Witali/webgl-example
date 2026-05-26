@@ -148,6 +148,44 @@ figcaption {
   font-size: 16px;
 }
 
+.decoder-timings {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-heading h2 {
+  margin: 0;
+  color: #f5f7fa;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.section-heading span {
+  color: #9aa7b5;
+  font-size: 12px;
+}
+
+.decoder-timing-table {
+  min-width: 720px;
+}
+
+.timing-status-ok {
+  color: #8fd6a4;
+}
+
+.timing-status-error {
+  color: #ff9a9a;
+}
+
 .canvases {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -395,6 +433,12 @@ details pre {
   .metrics,
   .canvases {
     grid-template-columns: 1fr;
+  }
+
+  .section-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .benchmark-summary {
