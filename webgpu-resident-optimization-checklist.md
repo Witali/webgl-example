@@ -24,11 +24,12 @@ Baseline before this checklist:
   - Idea: replace `expandBytesToUint32()` with packed storage and add a WGSL byte loader.
   - Expected benefit: reduces upload size and storage-buffer bandwidth for entropy reads.
   - Result: tried, not applied. Resident GPU decode changed from `57.00 ms` to `59.70 ms`, so it was slightly slower instead of `>1.3x` faster.
+  - Second pass with GPU warmup: tried again on 2026-05-26, not applied. Output stayed correct, but resident total regressed to `247.90 ms` and median stayed at `5.90 ms`.
 
 - [x] Add a fast Huffman prefix table in WGSL.
   - Idea: build `fastLength` and `fastSymbol` tables, then use `peekBits`/`skipBits` before falling back to canonical length search.
   - Expected benefit: fewer bit-by-bit loops and fewer `huffMin`/`huffMax` storage reads in serial entropy decode.
-  - Result: tried, not applied. A first version exceeded the entropy shader storage-buffer binding budget; a second version packed the fast tables into `huffSymbols`, but resident GPU decode regressed from `57.00 ms` to `115.00 ms`.
+  - Result: applied on second pass with GPU warmup. The accepted version packs fast tables into `huffSymbols` and uses a WGSL bit reservoir. Resident total improved from noisy `118.60-215.80 ms` baseline runs to `81.80 ms`; median improved from `5.80-5.90 ms` to `3.90 ms`, clearing the `1.3x` threshold.
 
 - [x] Explore GPU-resident prescan.
   - Idea: build block tasks on GPU, then reuse the parallel per-block decode shape from the prescan shader.
