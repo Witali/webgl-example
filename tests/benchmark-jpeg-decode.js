@@ -468,10 +468,15 @@ async function runGpuWarmupCube(options) {
     });
   }
 
-  const cube = createGpuWarmupCube(gl);
+  if (!window.TexturedCubeRenderer) {
+    throw new Error("TexturedCubeRenderer is unavailable");
+  }
+
+  const cube = await TexturedCubeRenderer.create(gl);
+  window.__gpuWarmupCubeRenderer = cube;
 
   setGpuWarmupStatus("loading texture");
-  await loadWarmupTexture(gl, cube.texture, "/assets/stone-texture-wic.jpg");
+  await cube.loadTexture("assets/stone-texture-wic.jpg");
 
   const started = performance.now();
   let frames = 0;
@@ -482,21 +487,13 @@ async function runGpuWarmupCube(options) {
   return new Promise((resolve) => {
     const render = () => {
       const elapsed = performance.now() - started;
-      const aspect = gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight);
 
-      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-      gl.clearColor(0.04, 0.055, 0.08, 1.0);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.useProgram(cube.program);
-      gl.uniform1f(cube.aspectLocation, aspect);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, cube.texture);
-
-      gl.uniform1f(cube.angleLocation, elapsed * 0.002);
-
-      for (let pass = 0; pass < options.drawPasses; pass += 1) {
-        gl.drawElements(gl.TRIANGLES, cube.indexCount, gl.UNSIGNED_SHORT, 0);
-      }
+      cube.draw({
+        angleY: elapsed * 0.002,
+        angleX: elapsed * 0.0014,
+        clearColor: [0.04, 0.055, 0.08, 1.0],
+        drawPasses: options.drawPasses,
+      });
 
       frames += 1;
       drawCalls += options.drawPasses;
@@ -529,200 +526,6 @@ async function runGpuWarmupCube(options) {
 
     requestAnimationFrame(render);
   });
-}
-
-function createGpuWarmupCube(gl) {
-  const vertexShader = compileWarmupShader(gl, gl.VERTEX_SHADER, `
-    attribute vec3 aPosition;
-    attribute vec3 aNormal;
-    attribute vec2 aTexCoord;
-    uniform float uAngle;
-    uniform float uAspect;
-    varying vec3 vNormal;
-    varying vec3 vWorldPosition;
-    varying vec2 vTexCoord;
-
-    void main() {
-      float cy = cos(uAngle);
-      float sy = sin(uAngle);
-      float cx = cos(uAngle * 0.73);
-      float sx = sin(uAngle * 0.73);
-      mat3 rotateY = mat3(
-        cy, 0.0, -sy,
-        0.0, 1.0, 0.0,
-        sy, 0.0, cy
-      );
-      mat3 rotateX = mat3(
-        1.0, 0.0, 0.0,
-        0.0, cx, sx,
-        0.0, -sx, cx
-      );
-      mat3 model = rotateX * rotateY;
-      vec3 p = model * aPosition;
-      float depth = p.z + 5.5;
-
-      vWorldPosition = p;
-      vNormal = normalize(model * aNormal);
-      vTexCoord = aTexCoord;
-
-      gl_Position = vec4((p.x * 2.3) / (depth * uAspect), (p.y * 2.3) / depth, (depth - 3.0) / 6.0, 1.0);
-    }
-  `);
-  const fragmentShader = compileWarmupShader(gl, gl.FRAGMENT_SHADER, `
-    precision mediump float;
-    varying vec3 vNormal;
-    varying vec3 vWorldPosition;
-    varying vec2 vTexCoord;
-
-    uniform sampler2D uStoneTexture;
-    uniform vec3 uLightPosition;
-    uniform vec3 uLightColor;
-    uniform vec3 uAmbientColor;
-
-    void main() {
-      vec3 normal = normalize(vNormal);
-      vec3 lightDirection = normalize(uLightPosition - vWorldPosition);
-      float diffuse = max(dot(normal, lightDirection), 0.0);
-      vec3 stoneColor = texture2D(uStoneTexture, vTexCoord).rgb;
-      vec3 color = stoneColor * (uAmbientColor + diffuse * uLightColor);
-      gl_FragColor = vec4(color, 1.0);
-    }
-  `);
-  const program = gl.createProgram();
-
-  gl.attachShader(program, vertexShader);
-  gl.attachShader(program, fragmentShader);
-  gl.linkProgram(program);
-
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    throw new Error(gl.getProgramInfoLog(program) || "GPU warmup program link failed");
-  }
-
-  gl.useProgram(program);
-
-  const positions = new Float32Array([
-    -1, -1,  1,  1, -1,  1,  1,  1,  1, -1,  1,  1,
-     1, -1, -1, -1, -1, -1, -1,  1, -1,  1,  1, -1,
-    -1,  1,  1,  1,  1,  1,  1,  1, -1, -1,  1, -1,
-    -1, -1, -1,  1, -1, -1,  1, -1,  1, -1, -1,  1,
-     1, -1,  1,  1, -1, -1,  1,  1, -1,  1,  1,  1,
-    -1, -1, -1, -1, -1,  1, -1,  1,  1, -1,  1, -1,
-  ]);
-  const normals = new Float32Array([
-     0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,
-     0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,
-     0,  1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,
-     0, -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,
-     1,  0,  0,  1,  0,  0,  1,  0,  0,  1,  0,  0,
-    -1,  0,  0, -1,  0,  0, -1,  0,  0, -1,  0,  0,
-  ]);
-  const texCoords = new Float32Array([
-    0, 0, 1, 0, 1, 1, 0, 1,
-    0, 0, 1, 0, 1, 1, 0, 1,
-    0, 0, 1, 0, 1, 1, 0, 1,
-    0, 0, 1, 0, 1, 1, 0, 1,
-    0, 0, 1, 0, 1, 1, 0, 1,
-    0, 0, 1, 0, 1, 1, 0, 1,
-  ]);
-  const indices = new Uint16Array([
-     0,  1,  2,  0,  2,  3,
-     4,  5,  6,  4,  6,  7,
-     8,  9, 10,  8, 10, 11,
-    12, 13, 14, 12, 14, 15,
-    16, 17, 18, 16, 18, 19,
-    20, 21, 22, 20, 22, 23,
-  ]);
-  const indexBuffer = gl.createBuffer();
-  const positionLocation = gl.getAttribLocation(program, "aPosition");
-  const normalLocation = gl.getAttribLocation(program, "aNormal");
-  const texCoordLocation = gl.getAttribLocation(program, "aTexCoord");
-  const texture = createWarmupTexture(gl);
-
-  bindWarmupAttribute(gl, positionLocation, positions, 3);
-  bindWarmupAttribute(gl, normalLocation, normals, 3);
-  bindWarmupAttribute(gl, texCoordLocation, texCoords, 2);
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-  gl.enable(gl.DEPTH_TEST);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.BACK);
-  gl.depthFunc(gl.LEQUAL);
-  gl.uniform1i(gl.getUniformLocation(program, "uStoneTexture"), 0);
-  gl.uniform3fv(gl.getUniformLocation(program, "uLightPosition"), [3.0, 4.0, 5.0]);
-  gl.uniform3fv(gl.getUniformLocation(program, "uLightColor"), [0.92, 0.9, 0.82]);
-  gl.uniform3fv(gl.getUniformLocation(program, "uAmbientColor"), [0.22, 0.22, 0.22]);
-
-  return {
-    program,
-    angleLocation: gl.getUniformLocation(program, "uAngle"),
-    aspectLocation: gl.getUniformLocation(program, "uAspect"),
-    indexCount: indices.length,
-    texture,
-  };
-}
-
-function bindWarmupAttribute(gl, location, data, size) {
-  const buffer = gl.createBuffer();
-
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-  gl.enableVertexAttribArray(location);
-  gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
-
-  return buffer;
-}
-
-function createWarmupTexture(gl) {
-  const texture = gl.createTexture();
-
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    1,
-    1,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    new Uint8Array([120, 120, 120, 255])
-  );
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-  return texture;
-}
-
-function loadWarmupTexture(gl, texture, url) {
-  return new Promise((resolve) => {
-    const image = new Image();
-
-    image.addEventListener("load", () => {
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-      resolve();
-    }, { once: true });
-    image.addEventListener("error", () => resolve(), { once: true });
-    image.src = url;
-  });
-}
-
-function compileWarmupShader(gl, type, source) {
-  const shader = gl.createShader(type);
-
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    throw new Error(gl.getShaderInfoLog(shader) || "GPU warmup shader compile failed");
-  }
-
-  return shader;
 }
 
 function setGpuWarmupStatus(message) {
