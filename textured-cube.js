@@ -11,8 +11,8 @@
 
   const SCRIPT_URL = resolveScriptUrl();
   const DEFAULT_SHADER_URLS = {
-    vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=material-maps"),
-    fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=material-maps"),
+    vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=relief-3x"),
+    fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=relief-3x"),
   };
   const CUBE_GEOMETRY = {
     positions: new Float32Array([
