@@ -3,7 +3,7 @@
  * benchmark GPU warm-up panel.
  * Processing blocks:
  * - Load the cube GLSL shaders and upload the shared cube geometry/tangent basis.
- * - Maintain model/view/projection matrices, lighting uniforms, material state, and textures.
+ * - Maintain model/view/projection matrices, lighting uniforms, material state, and texture maps.
  * - Draw one or many passes of the same lit rotating stone cube.
  */
 (function (global) {
@@ -11,8 +11,8 @@
 
   const SCRIPT_URL = resolveScriptUrl();
   const DEFAULT_SHADER_URLS = {
-    vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=material-height"),
-    fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=material-height"),
+    vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=material-maps"),
+    fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=material-maps"),
   };
   const CUBE_GEOMETRY = {
     positions: new Float32Array([
@@ -76,8 +76,6 @@
       heightStrength: 0.48,
     },
   };
-  const BRICK_HEIGHT_MAP_SIZE = 256;
-
   class TexturedCubeRenderer {
     static async create(gl, options) {
       const rendererOptions = options || {};
@@ -107,26 +105,33 @@
       );
       this.model = mat4Create();
       this.projection = mat4Create();
-      this.texture = createSolidTexture(gl, this.options.placeholderColor || [120, 120, 120, 255]);
-      this.heightTexture = createBrickHeightTexture(gl, this.options.heightMapSize || BRICK_HEIGHT_MAP_SIZE);
-      this.heightTexelSize = 1 / (this.options.heightMapSize || BRICK_HEIGHT_MAP_SIZE);
+      this.texture = createSolidTexture(gl, this.options.placeholderColor || [120, 120, 120, 255], 0);
+      this.heightTexture = createSolidTexture(gl, [128, 128, 128, 255], 1);
+      this.specularTexture = createSolidTexture(gl, [255, 255, 255, 255], 2);
+      this.heightTexelSize = [1, 1];
       this.material = { ...MATERIAL_PRESETS.matte };
 
       gl.useProgram(this.program);
       gl.uniformMatrix4fv(this.locations.view, false, this.view);
       gl.uniform1i(this.locations.stoneTexture, 0);
       gl.uniform1i(this.locations.heightTexture, 1);
+      gl.uniform1i(this.locations.specularTexture, 2);
       gl.uniform3fv(this.locations.lightPosition, this.options.lightPosition || [3.0, 4.0, 5.0]);
       gl.uniform3fv(this.locations.lightColor, this.options.lightColor || [0.92, 0.9, 0.82]);
       gl.uniform3fv(this.locations.ambientColor, this.options.ambientColor || [0.22, 0.22, 0.22]);
       gl.uniform3fv(this.locations.viewPosition, this.viewPosition);
-      gl.uniform2fv(this.locations.heightTexelSize, [this.heightTexelSize, this.heightTexelSize]);
+      gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
       this.setMaterial(this.options.material || "matte");
     }
 
     async loadTexture(url, options) {
       const textureOptions = options || {};
       const textureUrl = resolveProjectUrl(url);
+      const materialMapPromise = textureOptions.materialMaps === false
+        ? Promise.resolve()
+        : this.loadMaterialMapsForTexture(textureUrl, textureOptions).catch((error) => {
+            console.warn("Material map load failed, keeping placeholder maps.", error);
+          });
 
       if (textureOptions.preferGpuJpeg !== false && global.GpuJpegDecoder) {
         try {
@@ -134,6 +139,7 @@
           const decoded = await decoder.decodeUrl(textureUrl);
 
           this.replaceTexture(decoded.texture);
+          await materialMapPromise;
           return;
         } catch (error) {
           console.warn("GPU JPEG decode failed, falling back to browser image decode.", error);
@@ -145,16 +151,31 @@
       } catch (error) {
         console.warn("Browser texture decode failed, keeping placeholder texture.", error);
       }
+
+      await materialMapPromise;
     }
 
     async loadTextureWithBrowserDecoder(url) {
-      const image = await loadImage(resolveProjectUrl(url));
-      const gl = this.gl;
+      await loadImageTexture(this.gl, this.texture, resolveProjectUrl(url), 0, {
+        flipY: true,
+      });
+    }
 
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.texture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    async loadMaterialMapsForTexture(textureUrl, options) {
+      const mapUrls = createMaterialMapUrls(textureUrl, options);
+      const [heightResult] = await Promise.all([
+        loadOptionalMaterialTexture(this.gl, this.heightTexture, mapUrls.height, 1, "height"),
+        loadOptionalMaterialTexture(this.gl, this.specularTexture, mapUrls.specular, 2, "specular"),
+      ]);
+
+      if (heightResult) {
+        this.heightTexelSize = [
+          1 / Math.max(1, heightResult.width),
+          1 / Math.max(1, heightResult.height),
+        ];
+        this.gl.useProgram(this.program);
+        this.gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
+      }
     }
 
     replaceTexture(texture) {
@@ -245,6 +266,8 @@
       gl.bindTexture(gl.TEXTURE_2D, this.texture);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.heightTexture);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.specularTexture);
       gl.uniformMatrix4fv(this.locations.projection, false, this.projection);
       gl.uniformMatrix4fv(this.locations.model, false, this.model);
       gl.uniformMatrix3fv(this.locations.normalMatrix, false, mat3FromMat4(this.model));
@@ -299,6 +322,7 @@
       normalMatrix: gl.getUniformLocation(program, "uNormalMatrix"),
       stoneTexture: gl.getUniformLocation(program, "uStoneTexture"),
       heightTexture: gl.getUniformLocation(program, "uHeightTexture"),
+      specularTexture: gl.getUniformLocation(program, "uSpecularTexture"),
       heightTexelSize: gl.getUniformLocation(program, "uHeightTexelSize"),
       heightStrength: gl.getUniformLocation(program, "uHeightStrength"),
       lightPosition: gl.getUniformLocation(program, "uLightPosition"),
@@ -377,10 +401,10 @@
     return indexBuffer;
   }
 
-  function createSolidTexture(gl, color) {
+  function createSolidTexture(gl, color, unit) {
     const texture = gl.createTexture();
 
-    gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -401,52 +425,68 @@
     return texture;
   }
 
-  function createBrickHeightTexture(gl, size) {
-    const pixels = new Uint8Array(size * size);
-    const columns = 8;
-    const rows = 8;
-    const mortarWidth = 0.065;
+  async function loadImageTexture(gl, texture, url, unit, options) {
+    const image = await loadImage(resolveProjectUrl(url));
+    const uploadOptions = options || {};
 
-    for (let y = 0; y < size; y += 1) {
-      const v = y / size;
-      const row = Math.floor(v * rows);
-
-      for (let x = 0; x < size; x += 1) {
-        const u = x / size;
-        const shiftedU = u + (row % 2) * 0.5 / columns;
-        const brickU = fract(shiftedU * columns);
-        const brickV = fract(v * rows);
-        const edgeDistance = Math.min(brickU, 1 - brickU, brickV, 1 - brickV);
-        const brickFace = smoothstep(mortarWidth, mortarWidth * 1.9, edgeDistance);
-        const bevel = smoothstep(mortarWidth, 0.5, edgeDistance);
-        const noise = Math.sin((x * 12.9898 + y * 78.233) * 0.09) * 0.035;
-        const height = clamp(0.14 + brickFace * (0.72 + bevel * 0.16) + noise, 0, 1);
-
-        pixels[y * size + x] = Math.round(height * 255);
-      }
-    }
-
-    const texture = gl.createTexture();
-
-    gl.activeTexture(gl.TEXTURE1);
+    gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.LUMINANCE,
-      size,
-      size,
-      0,
-      gl.LUMINANCE,
-      gl.UNSIGNED_BYTE,
-      pixels
-    );
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, Boolean(uploadOptions.flipY));
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 
-    return texture;
+    return {
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height,
+    };
+  }
+
+  async function loadOptionalMaterialTexture(gl, texture, url, unit, label) {
+    if (!url) {
+      return null;
+    }
+
+    try {
+      return await loadImageTexture(gl, texture, url, unit, { flipY: true });
+    } catch (error) {
+      console.warn(`Failed to load ${label} map ${url}; keeping placeholder texture.`, error);
+      return null;
+    }
+  }
+
+  function createMaterialMapUrls(textureUrl, options) {
+    const mapOptions = options || {};
+
+    return {
+      height: mapOptions.heightMapUrl === false
+        ? null
+        : mapOptions.heightMapUrl
+          ? resolveProjectUrl(mapOptions.heightMapUrl)
+          : createSiblingMapUrl(textureUrl, "-height"),
+      specular: mapOptions.specularMapUrl === false
+        ? null
+        : mapOptions.specularMapUrl
+          ? resolveProjectUrl(mapOptions.specularMapUrl)
+          : createSiblingMapUrl(textureUrl, "-specular"),
+    };
+  }
+
+  function createSiblingMapUrl(textureUrl, suffix) {
+    const url = new URL(resolveProjectUrl(textureUrl));
+
+    if (!/\.[^/.]+$/.test(url.pathname)) {
+      return null;
+    }
+
+    url.pathname = url.pathname.replace(/\.[^/.]+$/, `${suffix}.png`);
+    url.search = "";
+    url.hash = "";
+
+    return url.href;
   }
 
   function loadImage(url) {
@@ -483,16 +523,6 @@
     }
 
     return "";
-  }
-
-  function fract(value) {
-    return value - Math.floor(value);
-  }
-
-  function smoothstep(edge0, edge1, value) {
-    const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
-
-    return t * t * (3 - 2 * t);
   }
 
   function clamp(value, min, max) {

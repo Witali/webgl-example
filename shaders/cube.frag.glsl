@@ -1,8 +1,8 @@
 /*
  * Purpose: Fragment shader for the rotating cube's textured lighting.
  * Processing blocks:
- * - Offset texture coordinates and normals from the procedural height map.
- * - Sample the stone texture and compute diffuse/specular material response.
+ * - Offset texture coordinates and normals from the generated height map.
+ * - Sample the stone texture and generated specular map for material response.
  * - Combine ambient, diffuse, and glossy or matte highlights into the final color.
  */
 precision mediump float;
@@ -15,6 +15,7 @@ varying vec2 vTexCoord;
 
 uniform sampler2D uStoneTexture;
 uniform sampler2D uHeightTexture;
+uniform sampler2D uSpecularTexture;
 uniform vec2 uHeightTexelSize;
 uniform float uHeightStrength;
 uniform vec3 uLightPosition;
@@ -48,7 +49,9 @@ void main() {
   normal = applyHeightNormal(reliefTexCoord, normal, tangent, bitangent);
   float diffuse = max(dot(normal, lightDirection), 0.0);
   vec3 halfVector = normalize(lightDirection + viewDirection);
-  float specular = pow(max(dot(normal, halfVector), 0.0), max(uShininess, 1.0)) * uSpecularStrength;
+  float specularMask = texture2D(uSpecularTexture, reliefTexCoord).r;
+  float specular = pow(max(dot(normal, halfVector), 0.0), max(uShininess, 1.0)) *
+    uSpecularStrength * specularMask;
 
   vec3 stoneColor = texture2D(uStoneTexture, reliefTexCoord).rgb;
   vec3 color = stoneColor * (uAmbientColor + diffuse * uLightColor) + specular * uLightColor;

@@ -236,6 +236,13 @@ Regenerate the checked-in WebP texture and landscape assets:
 npm run encode:webp-assets
 ```
 
+Regenerate the checked-in height and specular maps for the cube texture:
+
+```powershell
+$env:BROWSER='chrome'
+npm run generate:material-maps
+```
+
 The JPEG manifest also includes five public-domain clipart JPEG fixtures and
 five public-domain landscape JPEG fixtures. Their source pages are listed in
 `assets/benchmark-jpegs/clipart-sources.json` and

@@ -3,7 +3,8 @@
     "start": "http-server . -p 8000 -c-1",
     "build:wasm": "node tools/build-wasm.js",
     "benchmark:jpeg": "node tools/run-jpeg-benchmark.js",
-    "encode:webp-assets": "node tools/encode-webp-assets.js"
+    "encode:webp-assets": "node tools/encode-webp-assets.js",
+    "generate:material-maps": "node tools/generate-material-maps.js assets/stone-texture-wic.jpg"
   },
   "devDependencies": {
     "http-server": "^14.1.1",
