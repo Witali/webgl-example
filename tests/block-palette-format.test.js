@@ -11,7 +11,7 @@ const {
   getBlockPaletteFileLayout,
 } = require("../src/palette/block-palette-format.js");
 
-test("round-trips an explicit RGB888 block-palette image through BPAL v2", () => {
+test("round-trips an explicit RGB888 block-palette image through BPAL v3", () => {
   const values = [];
 
   for (let y = 0; y < 3; y += 1) {
@@ -87,6 +87,7 @@ test("stores vector endpoints and reconstructs the preview palette", () => {
     globalColorCount: 32,
     paletteColorBits: 24,
     paletteMode: "vector",
+    vectorColorSpace: "rgb",
     vectorDeviation: 0.05,
     colorSpace: "rgb",
   });
@@ -95,6 +96,7 @@ test("stores vector endpoints and reconstructs the preview palette", () => {
   const decoded = decodeBlockPaletteFile(encoded);
 
   assert.equal(decoded.paletteMode, "vector");
+  assert.equal(decoded.vectorColorSpace, "rgb");
   assert.equal(decoded.paletteVectorCount, result.paletteVectorCount);
   assert.equal(decoded.paletteVectors.length, result.paletteVectorCount);
   assert.equal(layout.globalPaletteBits, result.paletteVectorCount * 2 * 24);
@@ -106,6 +108,64 @@ test("stores vector endpoints and reconstructs the preview palette", () => {
     decoded.palette.map((color) => color.hex),
     result.palette.map((color) => color.hex)
   );
+  assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+});
+
+test("stores and reconstructs OKLab vector palettes in BPAL v3", () => {
+  const values = [];
+
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      values.push([x * 36, y * 36, (7 - x) * 36, 255]);
+    }
+  }
+
+  const result = compressImage(pixels(values), 8, 8, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 32,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorColorSpace: "oklab",
+    vectorDeviation: 0.02,
+    colorSpace: "oklab",
+  });
+  const decoded = decodeBlockPaletteFile(encodeBlockPaletteFile(result));
+
+  assert.equal(decoded.version, 3);
+  assert.equal(decoded.paletteMode, "vector");
+  assert.equal(decoded.vectorColorSpace, "oklab");
+  assert.deepEqual(
+    decoded.palette.map((color) => color.hex),
+    result.palette.map((color) => color.hex)
+  );
+  assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+});
+
+test("continues to decode legacy RGB-vector BPAL v2 files", () => {
+  const values = Array.from({ length: 16 }, (_, index) => {
+    const channel = index * 17;
+
+    return [channel, channel, channel, 255];
+  });
+  const result = compressImage(pixels(values), 4, 4, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 16,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorColorSpace: "rgb",
+    vectorDeviation: 0.02,
+    colorSpace: "rgb",
+  });
+  const encoded = encodeBlockPaletteFile(result);
+
+  encoded[4] = (encoded[4] & 0x0f) | 0x20;
+
+  const decoded = decodeBlockPaletteFile(encoded);
+
+  assert.equal(decoded.version, 2);
+  assert.equal(decoded.vectorColorSpace, "rgb");
   assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
 });
 
@@ -164,10 +224,10 @@ test("rejects invalid BPAL magic, versions, and lengths", () => {
   const invalidVersion = encoded.slice();
 
   invalidMagic[0] = 0;
-  invalidVersion[4] = (invalidVersion[4] & 0x0f) | 0x30;
+  invalidVersion[4] = (invalidVersion[4] & 0x0f) | 0x40;
 
   assert.throws(() => decodeBlockPaletteFile(invalidMagic), /Invalid BPAL magic/);
-  assert.throws(() => decodeBlockPaletteFile(invalidVersion), /Unsupported BPAL version: 3/);
+  assert.throws(() => decodeBlockPaletteFile(invalidVersion), /Unsupported BPAL version: 4/);
   assert.throws(() => decodeBlockPaletteFile(encoded.slice(0, -1)), /file size does not match/);
 });
 
