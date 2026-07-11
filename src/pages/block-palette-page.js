@@ -196,8 +196,8 @@ function processImage() {
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
   const workerUrl = settings.algorithm === "webgl"
-    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-8"
-    : "./src/palette/block-palette-worker.js?v=block-palette-14";
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-9"
+    : "./src/palette/block-palette-worker.js?v=block-palette-15";
   const worker = new Worker(workerUrl);
 
   state.worker = worker;
@@ -548,7 +548,7 @@ function downloadBlockPaletteFile() {
 
     downloadBlob(
       blob,
-      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${settings.paletteMode === "vector" ? `-${settings.vectorColorSpace}-vectors-${Math.round(settings.vectorDeviation * 100)}pct` : ""}.bpal`
+      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${settings.paletteMode === "vector" ? `-${settings.vectorColorSpace}-vectors-${formatDeviationPercent(settings.vectorDeviation).replace(".", "p")}pct` : ""}.bpal`
     );
   } catch (error) {
     showError(error);
@@ -577,7 +577,7 @@ function optimizeSettings() {
   setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
 
   const preview = createOptimizationPreview();
-  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-7");
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-8");
 
   state.optimizerWorker = worker;
 
@@ -815,7 +815,13 @@ function getPaletteStorageLabel(settings) {
     return formatVectorCount(settings.paletteVectorCount, settings.vectorColorSpace);
   }
 
-  return `${getVectorColorSpaceLabel(settings.vectorColorSpace)}-векторы · девиация ${Math.round(Number(settings.vectorDeviation) * 100)}%`;
+  return `${getVectorColorSpaceLabel(settings.vectorColorSpace)}-векторы · девиация ${formatDeviationPercent(settings.vectorDeviation)}%`;
+}
+
+function formatDeviationPercent(value) {
+  const percent = Number(value) * 100;
+
+  return percent < 1 ? percent.toFixed(1) : percent.toFixed(0);
 }
 
 function getPaletteMode() {

@@ -169,12 +169,12 @@ test("builds and interpolates adaptive vectors in OKLab", () => {
     paletteColorBits: 24,
     paletteMode: "vector",
     vectorColorSpace: "oklab",
-    vectorDeviation: 0.01,
+    vectorDeviation: 0.002,
     colorSpace: "oklab",
   });
 
   assert.equal(result.vectorColorSpace, "oklab");
-  assert.equal(result.vectorDeviation, 0.01);
+  assert.equal(result.vectorDeviation, 0.002);
   assert.ok(result.paletteVectorCount > 0);
   assert.equal(result.palette.length, 32);
   assert.ok(result.palette.every((color) => (
@@ -515,9 +515,9 @@ test("rejects non-power-of-two format settings", () => {
       localColorCount: 2,
       globalColorCount: 4,
       paletteMode: "vector",
-      vectorDeviation: 0.005,
+      vectorDeviation: 0.001,
     }),
-    /vectorDeviation must be between 0.01 and 0.5/
+    /vectorDeviation must be between 0.002 and 0.5/
   );
   assert.throws(
     () => compressImage(source, 2, 2, {

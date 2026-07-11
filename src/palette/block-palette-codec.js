@@ -1609,8 +1609,8 @@
       throw new RangeError(`Unsupported vector color space: ${vectorColorSpace}`);
     }
 
-    if (!Number.isFinite(vectorDeviation) || vectorDeviation < 0.01 || vectorDeviation > 0.5) {
-      throw new RangeError("vectorDeviation must be between 0.01 and 0.5");
+    if (!Number.isFinite(vectorDeviation) || vectorDeviation < 0.002 || vectorDeviation > 0.5) {
+      throw new RangeError("vectorDeviation must be between 0.002 and 0.5");
     }
 
     if (!DITHERING_MODES.has(dithering)) {
