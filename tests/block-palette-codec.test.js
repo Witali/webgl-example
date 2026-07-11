@@ -3,6 +3,21 @@
 const assert = require("node:assert/strict");
 const { compressImage } = require("../src/palette/block-palette-codec.js");
 
+test("uses quality-oriented explicit-palette defaults", () => {
+  const source = new Uint8ClampedArray(8 * 8 * 4);
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    source[offset + 3] = 255;
+  }
+
+  const result = compressImage(source, 8, 8);
+
+  assert.equal(result.blockSize, 8);
+  assert.equal(result.localColorCount, 8);
+  assert.equal(result.paletteMode, "explicit");
+  assert.equal(result.globalColorCount, 256);
+});
+
 test("keeps exact colors when every block can reference them", () => {
   const source = pixels([
     [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 255, 255],

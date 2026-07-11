@@ -34,7 +34,7 @@
   function compressImage(sourcePixels, width, height, settings) {
     const options = settings || {};
     const blockSize = Number(options.blockSize || 8);
-    const localColorCount = Number(options.localColorCount || 4);
+    const localColorCount = Number(options.localColorCount || 8);
     const globalColorCount = Number(options.globalColorCount || 256);
     const paletteColorBits = Number(options.paletteColorBits || 24);
     const paletteMode = options.paletteMode || "explicit";
@@ -441,9 +441,12 @@
     const replacementCandidates = expandBlockPaletteCandidates(
       selected,
       candidates,
+      sourceTargets,
+      counts,
       localColorCount,
       activeColorCount,
       paletteDistances,
+      palettePoints,
       paletteNeighborCache
     );
     const refined = refineSelectedColors(
@@ -585,9 +588,12 @@
   function expandBlockPaletteCandidates(
     selected,
     sourceColors,
+    sourceTargets,
+    counts,
     localColorCount,
     activeColorCount,
     paletteDistances,
+    palettePoints,
     paletteNeighborCache
   ) {
     const candidates = sourceColors.slice();
@@ -615,7 +621,103 @@
       }
     }
 
+    const optimizedCentroids = optimizeBlockCentroids(
+      selected,
+      sourceColors,
+      sourceTargets,
+      counts,
+      palettePoints
+    );
+
+    for (const centroid of optimizedCentroids) {
+      const centroidCandidates = findNearestPalettePoints(
+        centroid,
+        palettePoints,
+        Math.min(localColorCount, activeColorCount)
+      );
+
+      for (const candidate of centroidCandidates) {
+        if (!included[candidate]) {
+          included[candidate] = 1;
+          candidates.push(candidate);
+        }
+      }
+    }
+
     return candidates;
+  }
+
+  function optimizeBlockCentroids(
+    selected,
+    sourceColors,
+    sourceTargets,
+    counts,
+    palettePoints
+  ) {
+    const centroids = selected.map((paletteIndex) => palettePoints[paletteIndex].slice());
+
+    for (let iteration = 0; iteration < 6; iteration += 1) {
+      const sums = centroids.map(() => [0, 0, 0]);
+      const weights = new Float64Array(centroids.length);
+
+      for (let sourcePosition = 0; sourcePosition < sourceTargets.length; sourcePosition += 1) {
+        const centroidIndex = nearestPointIndex(sourceTargets[sourcePosition], centroids);
+        const weight = counts[sourceColors[sourcePosition]];
+
+        sums[centroidIndex][0] += sourceTargets[sourcePosition][0] * weight;
+        sums[centroidIndex][1] += sourceTargets[sourcePosition][1] * weight;
+        sums[centroidIndex][2] += sourceTargets[sourcePosition][2] * weight;
+        weights[centroidIndex] += weight;
+      }
+
+      let movement = 0;
+
+      for (let centroidIndex = 0; centroidIndex < centroids.length; centroidIndex += 1) {
+        if (weights[centroidIndex] === 0) {
+          continue;
+        }
+
+        const next = sums[centroidIndex].map((value) => value / weights[centroidIndex]);
+
+        movement += squaredDistance(centroids[centroidIndex], next);
+        centroids[centroidIndex] = next;
+      }
+
+      if (movement < 1e-8) {
+        break;
+      }
+    }
+
+    return centroids;
+  }
+
+  function findNearestPalettePoints(point, palettePoints, count) {
+    const nearest = [];
+
+    for (let paletteIndex = 0; paletteIndex < palettePoints.length; paletteIndex += 1) {
+      const entry = {
+        index: paletteIndex,
+        distance: squaredDistance(point, palettePoints[paletteIndex]),
+      };
+      let position = nearest.length;
+
+      while (position > 0 && (
+        entry.distance < nearest[position - 1].distance ||
+        (entry.distance === nearest[position - 1].distance && entry.index < nearest[position - 1].index)
+      )) {
+        position -= 1;
+      }
+
+      if (position < count) {
+        nearest.splice(position, 0, entry);
+
+        if (nearest.length > count) {
+          nearest.pop();
+        }
+      }
+    }
+
+    return nearest.map((entry) => entry.index);
   }
 
   function getPaletteNeighbors(
@@ -680,7 +782,7 @@
       isSelected[color] = 1;
     }
 
-    for (let pass = 0; pass < 2; pass += 1) {
+    for (let pass = 0; pass < 4; pass += 1) {
       let bestError = calculateSelectionError(
         selected,
         sourceColors,
