@@ -85,7 +85,7 @@
       vec3 firstColor = texelFetch(u_palette, ivec2(0, 0), 0).rgb;
       float bestDistance = colorDistance(sourcePoint, colorPoint(firstColor, u_colorSpace));
 
-      for (int index = 1; index < 1024; index += 1) {
+      for (int index = 1; index < 4096; index += 1) {
         if (index >= u_paletteSize) {
           break;
         }

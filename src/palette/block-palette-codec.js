@@ -15,6 +15,7 @@
   "use strict";
 
   const MAX_PALETTE_SAMPLE_PIXELS = 32768;
+  const MAX_PALETTE_VECTORS = 512;
   const DITHERING_MODES = new Set(["none", "pattern-2x2", "pattern", "floyd-steinberg"]);
   const PALETTE_MODES = new Set(["explicit", "vector"]);
   const VECTOR_COLOR_SPACES = new Set(["rgb", "oklab"]);
@@ -62,7 +63,10 @@
       diversity
     );
 
-    const sample = samplePixels(sourcePixels, MAX_PALETTE_SAMPLE_PIXELS);
+    const maximumSamplePixels = globalColorCount >= 4096
+      ? 8192
+      : MAX_PALETTE_SAMPLE_PIXELS;
+    const sample = samplePixels(sourcePixels, maximumSamplePixels);
     let activePalette;
     let paletteVectors = [];
     let vectorDeviationActual = 0;
@@ -86,7 +90,12 @@
         sample.length / 4,
         1,
         globalColorCount,
-        { colorSpace, dithering: "none", diversity, maxIterations: 16 }
+        {
+          colorSpace,
+          dithering: "none",
+          diversity,
+          maxIterations: globalColorCount >= 4096 ? 6 : 16,
+        }
       );
 
       activePalette = quantizedSample.palette.length > 0
@@ -949,7 +958,7 @@
     ));
     const maximumVectors = Math.max(
       1,
-      Math.min(Math.floor(globalColorCount / 2), points.length)
+      Math.min(MAX_PALETTE_VECTORS, Math.floor(globalColorCount / 2), points.length)
     );
     const clusters = [fitVectorCluster(points)];
 
@@ -1316,8 +1325,8 @@
       throw new RangeError("blockSize must be a power of two from 2 to 64");
     }
 
-    if (!isPowerOfTwo(globalColorCount) || globalColorCount < 2 || globalColorCount > 1024) {
-      throw new RangeError("globalColorCount must be a power of two from 2 to 1024");
+    if (!isPowerOfTwo(globalColorCount) || globalColorCount < 2 || globalColorCount > 4096) {
+      throw new RangeError("globalColorCount must be a power of two from 2 to 4096");
     }
 
     if (paletteColorBits !== 16 && paletteColorBits !== 24) {

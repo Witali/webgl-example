@@ -16,10 +16,10 @@
 
   const BPAL_HEADER_BYTES = 14;
   const DEFAULT_PROFILES = [
+    { blockSize: 4, localColorCount: 16, globalColorCount: 4096, paletteColorBits: 24 },
     { blockSize: 4, localColorCount: 16, globalColorCount: 1024, paletteColorBits: 24 },
-    { blockSize: 4, localColorCount: 16, globalColorCount: 512, paletteColorBits: 24 },
-    { blockSize: 4, localColorCount: 8, globalColorCount: 512, paletteColorBits: 24 },
-    { blockSize: 8, localColorCount: 16, globalColorCount: 512, paletteColorBits: 24 },
+    { blockSize: 4, localColorCount: 8, globalColorCount: 1024, paletteColorBits: 24 },
+    { blockSize: 8, localColorCount: 16, globalColorCount: 1024, paletteColorBits: 24 },
     { blockSize: 8, localColorCount: 8, globalColorCount: 256, paletteColorBits: 24 },
     { blockSize: 8, localColorCount: 8, globalColorCount: 256, paletteColorBits: 16 },
     { blockSize: 8, localColorCount: 4, globalColorCount: 256, paletteColorBits: 16 },

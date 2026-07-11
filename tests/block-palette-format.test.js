@@ -182,27 +182,27 @@ test("continues to decode legacy BPAL v1 files", () => {
   ]);
 });
 
-test("stores and restores 10-bit common-palette indices", () => {
-  const palette = Array.from({ length: 1024 }, (_, index) => ({
+test("stores and restores 12-bit common-palette indices", () => {
+  const palette = Array.from({ length: 4096 }, (_, index) => ({
     r: index & 255,
-    g: index >> 2 & 255,
-    b: index >> 4 & 255,
+    g: index >> 4 & 255,
+    b: index >> 6 & 255,
   }));
   const image = {
     width: 2,
     height: 2,
     blockSize: 2,
     localColorCount: 2,
-    globalColorCount: 1024,
+    globalColorCount: 4096,
     paletteColorBits: 24,
     palette,
-    blockPaletteIndices: new Uint16Array([0, 1023]),
+    blockPaletteIndices: new Uint16Array([0, 4095]),
     pixelIndices: new Uint8Array([0, 1, 1, 0]),
   };
   const decoded = decodeBlockPaletteFile(encodeBlockPaletteFile(image));
 
-  assert.equal(decoded.globalIndexBits, 10);
-  assert.deepEqual(Array.from(decoded.blockPaletteIndices), [0, 1023]);
+  assert.equal(decoded.globalIndexBits, 12);
+  assert.deepEqual(Array.from(decoded.blockPaletteIndices), [0, 4095]);
   assert.deepEqual(Array.from(decoded.pixelIndices), [0, 1, 1, 0]);
   assert.deepEqual(Array.from(decoded.pixels.slice(4, 8)), [255, 255, 63, 255]);
 });

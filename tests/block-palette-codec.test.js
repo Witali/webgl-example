@@ -44,33 +44,34 @@ test("calculates the tightly packed 256-color, four-color block layout", () => {
   assert.equal(result.storage.totalBytes, 788);
 });
 
-test("supports 512-color and 1024-color common palettes", () => {
+test("supports 1024-color and 4096-color common palettes", () => {
   const source = new Uint8ClampedArray(8 * 8 * 4);
 
   for (let offset = 0; offset < source.length; offset += 4) {
     source[offset + 3] = 255;
   }
 
-  const palette512 = compressImage(source, 8, 8, {
-    blockSize: 8,
-    localColorCount: 4,
-    globalColorCount: 512,
-  });
   const palette1024 = compressImage(source, 8, 8, {
     blockSize: 8,
     localColorCount: 4,
     globalColorCount: 1024,
   });
+  const palette4096 = compressImage(source, 8, 8, {
+    blockSize: 8,
+    localColorCount: 4,
+    globalColorCount: 4096,
+  });
 
-  assert.equal(palette512.globalIndexBits, 9);
-  assert.equal(palette512.storage.globalPaletteBytes, 1536);
-  assert.equal(palette512.storage.blockPaletteBytes, 5);
-  assert.equal(palette512.storage.totalBytes, 1557);
   assert.equal(palette1024.globalIndexBits, 10);
   assert.equal(palette1024.storage.globalPaletteBytes, 3072);
   assert.equal(palette1024.storage.blockPaletteBytes, 5);
   assert.equal(palette1024.storage.totalBytes, 3093);
   assert.ok(Array.from(palette1024.blockPaletteIndices).every((index) => index < 1024));
+  assert.equal(palette4096.globalIndexBits, 12);
+  assert.equal(palette4096.storage.globalPaletteBytes, 12288);
+  assert.equal(palette4096.storage.blockPaletteBytes, 6);
+  assert.equal(palette4096.storage.totalBytes, 12310);
+  assert.ok(Array.from(palette4096.blockPaletteIndices).every((index) => index < 4096));
 });
 
 test("builds an adaptive multi-vector palette from the requested deviation", () => {
@@ -414,8 +415,8 @@ test("rejects non-power-of-two format settings", () => {
     /localColorCount must be a power of two/
   );
   assert.throws(
-    () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 2, globalColorCount: 2048 }),
-    /globalColorCount must be a power of two from 2 to 1024/
+    () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 2, globalColorCount: 8192 }),
+    /globalColorCount must be a power of two from 2 to 4096/
   );
   assert.throws(
     () => compressImage(source, 2, 2, {
