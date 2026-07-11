@@ -12,7 +12,7 @@
         <div class="title-block">
           <a class="back-link" href="./index.html">← На главную</a>
           <h1>Блочно-палитровое сжатие</h1>
-          <p>Одна общая палитра RGB565 или RGB888 для изображения и маленькая таблица ее индексов в каждом блоке.</p>
+          <p>Общая палитра хранится явно или как набор RGB-векторов, а каждый блок содержит маленькую таблицу ее индексов.</p>
         </div>
 
         <form id="controls">
@@ -66,6 +66,23 @@
             <select id="palette-color-bits" name="paletteColorBits">
               <option value="24" selected>24 бита · RGB888</option>
               <option value="16">16 бит · RGB565</option>
+            </select>
+          </label>
+
+          <label>
+            Хранение общей палитры
+            <select id="palette-mode" name="paletteMode">
+              <option value="explicit">Все цвета явно</option>
+              <option value="vector" selected>RGB-векторы</option>
+            </select>
+          </label>
+
+          <label>
+            Девиация от оси
+            <select id="vector-deviation" name="vectorDeviation">
+              <option value="0.02">2% · точнее</option>
+              <option value="0.05" selected>5% · баланс</option>
+              <option value="0.10">10% · компактнее</option>
             </select>
           </label>
 
@@ -156,7 +173,7 @@
         </figure>
         <figure>
           <figcaption class="result-caption">
-            <span>Восстановленное изображение</span>
+            <span>Предпросмотр восстановленного BPAL</span>
             <span class="result-caption-controls">
               <output id="zoom-level" title="Ctrl + колесо для изменения масштаба">100%</output>
               <label><input id="show-grid" type="checkbox" checked> Сетка блоков</label>
@@ -186,7 +203,7 @@
         <div class="section-heading">
           <div>
             <h2 id="global-title">Общая палитра</h2>
-            <p>Цвета k-means в sRGB; число на образце — индекс, записываемый в блоках.</p>
+            <p>Именно эта палитра будет восстановлена из BPAL; число на образце — индекс, записываемый в блоках.</p>
           </div>
           <span id="palette-summary">—</span>
         </div>
@@ -194,7 +211,7 @@
       </section>
     </main>
 
-    <script src="./src/palette/block-palette-format.js?v=block-palette-1"></script>
-    <script src="./src/pages/block-palette-page.js?v=block-palette-9"></script>
+    <script src="./src/palette/block-palette-format.js?v=block-palette-2"></script>
+    <script src="./src/pages/block-palette-page.js?v=block-palette-10"></script>
   </body>
 </html>

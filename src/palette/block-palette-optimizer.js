@@ -14,7 +14,7 @@
 })(typeof self !== "undefined" ? self : globalThis, function (blockPaletteCodec) {
   "use strict";
 
-  const BPAL_HEADER_BYTES = 12;
+  const BPAL_HEADER_BYTES = 14;
   const DEFAULT_PROFILES = [
     { blockSize: 4, localColorCount: 16, globalColorCount: 1024, paletteColorBits: 24 },
     { blockSize: 4, localColorCount: 16, globalColorCount: 512, paletteColorBits: 24 },
@@ -51,6 +51,8 @@
       colorSpace: searchOptions.colorSpace || "oklab",
       dithering: searchOptions.dithering || "none",
       diversity: searchOptions.diversity === undefined ? 0 : searchOptions.diversity,
+      paletteMode: searchOptions.paletteMode || "explicit",
+      vectorDeviation: searchOptions.vectorDeviation === undefined ? 0.05 : searchOptions.vectorDeviation,
     };
     const candidates = [];
 

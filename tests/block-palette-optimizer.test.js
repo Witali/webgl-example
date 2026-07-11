@@ -5,6 +5,7 @@ const {
   findBalancedBlockPaletteSettings,
   paretoFrontier,
 } = require("../src/palette/block-palette-optimizer.js");
+const { compressImage } = require("../src/palette/block-palette-codec.js");
 
 test("searches profiles and returns a non-dominated balanced setting", () => {
   const source = new Uint8ClampedArray(16 * 16 * 4);
@@ -56,6 +57,30 @@ test("removes settings dominated by both file size and error", () => {
   const frontier = paretoFrontier([best, smaller, dominated]);
 
   assert.deepEqual(frontier, [smaller, best]);
+});
+
+test("optimizes using vector-palette storage and the BPAL v2 header", () => {
+  const source = new Uint8ClampedArray([
+    0, 0, 0, 255, 85, 85, 85, 255,
+    170, 170, 170, 255, 255, 255, 255, 255,
+  ]);
+  const profile = {
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 8,
+    paletteColorBits: 24,
+  };
+  const options = {
+    profiles: [profile],
+    colorSpace: "rgb",
+    paletteMode: "vector",
+    vectorDeviation: 0.02,
+  };
+  const optimized = findBalancedBlockPaletteSettings(source, 2, 2, options);
+  const compressed = compressImage(source, 2, 2, { ...profile, ...options });
+
+  assert.equal(compressed.paletteVectorCount, 1);
+  assert.equal(optimized.selected.fileBytes, compressed.storage.totalBytes + 14);
 });
 
 function test(name, callback) {
