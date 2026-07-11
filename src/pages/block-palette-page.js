@@ -196,8 +196,8 @@ function processImage() {
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
   const workerUrl = settings.algorithm === "webgl"
-    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-3"
-    : "./src/palette/block-palette-worker.js?v=block-palette-9";
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-4"
+    : "./src/palette/block-palette-worker.js?v=block-palette-10";
   const worker = new Worker(workerUrl);
 
   state.worker = worker;
@@ -262,7 +262,7 @@ function renderResult(result) {
   storageHeaderFormula.textContent = `${window.BlockPaletteFormat.MAGIC} · v${window.BlockPaletteFormat.VERSION} · ${fileLayout.bitFieldHeaderBits} бит полей`;
   storageGlobal.textContent = formatBitSize(result.storage.globalPaletteBits);
   storageGlobalFormula.textContent = result.paletteMode === "vector"
-    ? `${formatVectorCount(result.paletteVectorCount)} × 2 конца × ${result.paletteColorBits / 8} байта · восстановлено ${result.globalColorCount} цветов`
+    ? `${formatVectorCount(result.paletteVectorCount, result.vectorColorSpace)} × 2 конца × ${result.paletteColorBits / 8} байта · восстановлено ${result.globalColorCount} цветов`
     : `${result.globalColorCount} × ${result.paletteColorBits / 8} байта · ${getPaletteFormatLabel(result.paletteColorBits)}`;
   storageBlocks.textContent = formatBitSize(result.storage.blockPaletteBits);
   storageBlocksFormula.textContent = `${formatInteger(result.blockCount)} × ${result.localColorCount} × ${result.globalIndexBits} бит`;
@@ -271,7 +271,7 @@ function renderResult(result) {
   storageTotal.textContent = formatBytes(fileLayout.totalBytes);
   storageTotalFormula.textContent = `${formatBitSize(fileLayout.payloadBits)} данных · ${fileLayout.paddingBits === 0 ? "без padding" : `${fileLayout.paddingBits} бит padding`}`;
   paletteSummary.textContent = result.paletteMode === "vector"
-    ? `${formatVectorCount(result.paletteVectorCount)} · девиация до ${(result.vectorDeviationActual * 100).toFixed(1)}% · ${result.resultColorCount} использовано`
+    ? `${formatVectorCount(result.paletteVectorCount, result.vectorColorSpace)} · девиация до ${(result.vectorDeviationActual * 100).toFixed(1)}% · ${result.resultColorCount} использовано`
     : `${result.activeGlobalColorCount} активных · ${result.resultColorCount} использовано · ${getPaletteFormatLabel(result.paletteColorBits)}`;
 
   globalPaletteElement.replaceChildren(...result.palette.map(createGlobalSwatch));
@@ -291,6 +291,7 @@ function renderResult(result) {
     globalColorCount: result.globalColorCount,
     paletteColorBits: result.paletteColorBits,
     paletteMode: result.paletteMode,
+    vectorColorSpace: result.vectorColorSpace,
     vectorDeviation: result.vectorDeviation,
     vectorDeviationActual: result.vectorDeviationActual,
     paletteVectorCount: result.paletteVectorCount,
@@ -426,7 +427,8 @@ function getSettings() {
     localColorCount: Number(localColorCountSelect.value),
     globalColorCount: Number(globalColorCountSelect.value),
     paletteColorBits: Number(paletteColorBitsSelect.value),
-    paletteMode: paletteModeSelect.value,
+    paletteMode: getPaletteMode(),
+    vectorColorSpace: getVectorColorSpace(),
     vectorDeviation: Number(vectorDeviationSelect.value),
     colorSpace: colorSpaceSelect.value,
     algorithm: algorithmSelect.value,
@@ -546,7 +548,7 @@ function downloadBlockPaletteFile() {
 
     downloadBlob(
       blob,
-      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${settings.paletteMode === "vector" ? `-vectors-${Math.round(settings.vectorDeviation * 100)}pct` : ""}.bpal`
+      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${settings.paletteMode === "vector" ? `-${settings.vectorColorSpace}-vectors-${Math.round(settings.vectorDeviation * 100)}pct` : ""}.bpal`
     );
   } catch (error) {
     showError(error);
@@ -575,7 +577,7 @@ function optimizeSettings() {
   setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
 
   const preview = createOptimizationPreview();
-  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-2");
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-3");
 
   state.optimizerWorker = worker;
 
@@ -634,7 +636,8 @@ function optimizeSettings() {
       colorSpace: colorSpaceSelect.value,
       dithering: ditheringSelect.value,
       diversity: getDiversity(),
-      paletteMode: paletteModeSelect.value,
+      paletteMode: getPaletteMode(),
+      vectorColorSpace: getVectorColorSpace(),
       vectorDeviation: Number(vectorDeviationSelect.value),
     },
   }, [preview.data.buffer]);
@@ -736,7 +739,7 @@ function setBusy(busy) {
   globalColorCountSelect.disabled = busy;
   paletteColorBitsSelect.disabled = busy;
   paletteModeSelect.disabled = busy;
-  vectorDeviationSelect.disabled = busy || paletteModeSelect.value !== "vector";
+  vectorDeviationSelect.disabled = busy || getPaletteMode() !== "vector";
   colorSpaceSelect.disabled = busy;
   algorithmSelect.disabled = busy;
   diversityInput.disabled = busy;
@@ -766,7 +769,7 @@ function formatBytes(bytes) {
 }
 
 function updatePaletteModeControls() {
-  vectorDeviationSelect.disabled = paletteModeSelect.disabled || paletteModeSelect.value !== "vector";
+  vectorDeviationSelect.disabled = paletteModeSelect.disabled || getPaletteMode() !== "vector";
 }
 
 function formatBitSize(bits) {
@@ -809,13 +812,25 @@ function getPaletteStorageLabel(settings) {
   }
 
   if (settings.paletteVectorCount) {
-    return formatVectorCount(settings.paletteVectorCount);
+    return formatVectorCount(settings.paletteVectorCount, settings.vectorColorSpace);
   }
 
-  return `RGB-векторы · девиация ${Math.round(Number(settings.vectorDeviation) * 100)}%`;
+  return `${getVectorColorSpaceLabel(settings.vectorColorSpace)}-векторы · девиация ${Math.round(Number(settings.vectorDeviation) * 100)}%`;
 }
 
-function formatVectorCount(count) {
+function getPaletteMode() {
+  return paletteModeSelect.value === "explicit" ? "explicit" : "vector";
+}
+
+function getVectorColorSpace() {
+  return paletteModeSelect.value === "vector-oklab" ? "oklab" : "rgb";
+}
+
+function getVectorColorSpaceLabel(value) {
+  return value === "oklab" ? "OKLab" : "RGB";
+}
+
+function formatVectorCount(count, vectorColorSpace) {
   const absolute = Math.abs(Number(count));
   const modulo100 = absolute % 100;
   const modulo10 = absolute % 10;
@@ -825,7 +840,7 @@ function formatVectorCount(count) {
     suffix = modulo10 === 1 ? "" : modulo10 >= 2 && modulo10 <= 4 ? "а" : "ов";
   }
 
-  return `${formatInteger(count)} RGB-вектор${suffix}`;
+  return `${formatInteger(count)} ${getVectorColorSpaceLabel(vectorColorSpace)}-вектор${suffix}`;
 }
 
 function getDitheringLabel(mode) {

@@ -52,6 +52,7 @@
       dithering: searchOptions.dithering || "none",
       diversity: searchOptions.diversity === undefined ? 0 : searchOptions.diversity,
       paletteMode: searchOptions.paletteMode || "explicit",
+      vectorColorSpace: searchOptions.vectorColorSpace || "rgb",
       vectorDeviation: searchOptions.vectorDeviation === undefined ? 0.05 : searchOptions.vectorDeviation,
     };
     const candidates = [];
