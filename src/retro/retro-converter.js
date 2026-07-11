@@ -2,7 +2,7 @@
   "use strict";
 
   const paletteQuantizer = typeof module === "object" && module.exports
-    ? require("./palette-quantizer.js")
+    ? require("../palette/palette-quantizer.js")
     : root.PaletteQuantizer;
   const api = factory(paletteQuantizer);
 

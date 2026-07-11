@@ -152,7 +152,7 @@ function processImage() {
   const profile = PROFILES[mode];
   const prepared = prepareTargetImage(profile.width, profile.height, fitSelect.value);
   const sourceCopy = new Uint8ClampedArray(prepared.data);
-  const worker = new Worker("./retro-worker.js?v=retro-2");
+  const worker = new Worker("./src/retro/retro-worker.js?v=src-layout-1");
 
   state.worker = worker;
   setStatus(

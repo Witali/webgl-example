@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { quantizeImage } = require("../palette-quantizer.js");
+const { quantizeImage } = require("../src/palette/palette-quantizer.js");
 
 test("keeps two exact source colors when two clusters are requested", () => {
   const source = pixels([

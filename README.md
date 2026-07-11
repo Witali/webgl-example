@@ -7,10 +7,11 @@ decoder, upload support, diff contrast controls, and benchmark pages with
 readable timing tables.
 
 This project renders a textured rotating cube and includes a small standalone
-GPU-assisted JPEG decoder in `gpu-jpeg.js`, a pure JavaScript JPEG decoder in
-`jpeg-js-decoder.js`, a WebGPU/WGSL JPEG reconstruction variant in
-`webgpu-wgsl-jpeg.js`, a pure JavaScript lossy WebP/VP8 decoder in `WebP-dec.js`,
-and a WASM/libwebp WebP decoder wrapper in `webp-decoder.js`.
+GPU-assisted JPEG decoder in `src/decoders/gpu-jpeg.js`, a pure JavaScript JPEG
+decoder in `src/decoders/jpeg-js-decoder.js`, a WebGPU/WGSL JPEG reconstruction
+variant in `src/decoders/webgpu-wgsl-jpeg.js`, a pure JavaScript lossy WebP/VP8
+decoder in `src/decoders/WebP-dec.js`, and a WASM/libwebp WebP decoder wrapper
+in `src/decoders/webp-decoder.js`.
 
 Open `index.html` through a local server to choose between:
 
@@ -25,6 +26,18 @@ Open `index.html` through a local server to choose between:
 - `benchmarks.html` for native browser, JS-only, WASM, WASM+GPU, GPU, WebGPU
   WGSL, optional WebGPU resident, and WebP decode timings
 - `browser-specs.html` for WebGPU, WebGL, and WebAssembly capability checks
+
+Browser runtime sources are organized under `src/`:
+
+- `src/core/` for shared rendering code
+- `src/decoders/` for JPEG, WebP, WASM, WebGL, and WebGPU decoders
+- `src/pages/` for page entry points
+- `src/palette/` for palette quantization and its worker
+- `src/retro/` for retro-format conversion and its worker
+- `src/shaders/` for GLSL and WGSL shader sources
+
+Node utilities, browser harnesses, and automated checks remain in `tools/` and
+`tests/`; vendored third-party runtime files remain in `assets/vendor/`.
 
 ## `GpuJpegDecoder`
 
@@ -41,8 +54,8 @@ const result = await decoder.decodeUrl("assets/stone-texture-wic.jpg");
 gl.bindTexture(gl.TEXTURE_2D, result.texture);
 ```
 
-The WebGL shader sources are loaded from `shaders/jpeg-idct.vert.glsl` and
-`shaders/jpeg-idct.frag.glsl`, so run the demo through a local server instead
+The WebGL shader sources are loaded from `src/shaders/jpeg-idct.vert.glsl` and
+`src/shaders/jpeg-idct.frag.glsl`, so run the demo through a local server instead
 of opening the HTML files directly from disk.
 
 The returned object has:
@@ -54,7 +67,7 @@ The returned object has:
 
 ## `JsJpegDecoder`
 
-`jpeg-js-decoder.js` is the CPU-only JPEG reconstruction path. It reuses the
+`src/decoders/jpeg-js-decoder.js` is the CPU-only JPEG reconstruction path. It reuses the
 existing JavaScript JPEG marker and Huffman parser from `GpuJpegDecoder.parse()`,
 then performs IDCT, chroma upsampling, grayscale or YCbCr-to-RGBA conversion,
 and byte output entirely in JavaScript.
@@ -67,7 +80,7 @@ console.log(result.pixels); // Uint8ClampedArray RGBA pixels
 
 ## `WasmWebpDecoder`
 
-`webp-decoder.js` wraps `@jsquash/webp`, which is a libwebp WebAssembly decoder.
+`src/decoders/webp-decoder.js` wraps `@jsquash/webp`, which is a libwebp WebAssembly decoder.
 It returns RGBA pixels so the visual comparison page can compare browser WebP
 decode against an independent WASM decode path.
 The browser runtime files needed by this decoder are checked in under
@@ -81,8 +94,8 @@ const result = await decoder.decodeUrl("assets/benchmark-webps/bench-000.webp");
 
 ## `PureJsWebpDecoder`
 
-`WebP-dec.js` is a standalone JavaScript WebP decoder path used by
-`webp-js-decoder.js`. It parses RIFF/WebP containers and decodes lossy `VP8 `
+`src/decoders/WebP-dec.js` is a standalone JavaScript WebP decoder path used by
+`src/decoders/webp-js-decoder.js`. It parses RIFF/WebP containers and decodes lossy `VP8 `
 key frames directly in JavaScript without `Image`, `createImageBitmap`,
 `ImageDecoder`, canvas image draw/readback, WASM, or third-party libraries.
 
@@ -95,7 +108,7 @@ path rather than a bit-exact replacement for libwebp.
 
 ## `WebGpuJpegDecoder`
 
-`webgpu-jpeg.js` is an experimental GPU-resident baseline JPEG decoder. It
+`src/decoders/webgpu-jpeg.js` is an experimental GPU-resident baseline JPEG decoder. It
 uploads the JPEG byte stream to a WebGPU storage buffer and runs Huffman entropy
 decode, dequantization, IDCT, YCbCr upsampling, and RGBA output in GPU compute
 passes. JavaScript still parses JPEG headers and tables so the browser can
@@ -120,10 +133,10 @@ the existing CPU/WASM/GPU-assisted paths instead.
 
 ## `WebGpuWgslJpegDecoder`
 
-`webgpu-wgsl-jpeg.js` is a WebGPU compute-shader sibling of the WebGL
+`src/decoders/webgpu-wgsl-jpeg.js` is a WebGPU compute-shader sibling of the WebGL
 `GpuJpegDecoder` path. It reuses `GpuJpegDecoder.parse()` for JPEG markers,
 Huffman entropy decoding, progressive scan handling, and dequantization, then
-uploads component coefficient buffers to `shaders/jpeg-idct-compute.wgsl`.
+uploads component coefficient buffers to `src/shaders/jpeg-idct-compute.wgsl`.
 
 The WGSL shader runs direct 8x8 IDCT, center-aligned chroma upsampling, grayscale
 or YCbCr-to-RGBA conversion, and writes packed pixels to a storage buffer. This

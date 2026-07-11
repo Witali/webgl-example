@@ -10,7 +10,7 @@
   "use strict";
 
   const WORKGROUP_SIZE = 8;
-  const SHADER_URL = resolveShaderUrl("shaders/jpeg-idct-compute.wgsl");
+  const SHADER_URL = resolveShaderUrl("../shaders/jpeg-idct-compute.wgsl");
   let shaderSourcePromise = null;
 
   // Public WebGPU facade: CPU entropy decode plus WGSL compute pixel reconstruction.

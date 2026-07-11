@@ -1,7 +1,7 @@
 "use strict";
 
-importScripts("./palette-quantizer.js?v=retro-2");
-importScripts("./retro-converter.js?v=retro-2");
+importScripts("../palette/palette-quantizer.js?v=src-layout-1");
+importScripts("./retro-converter.js?v=src-layout-1");
 
 self.addEventListener("message", (event) => {
   const { mode, pixels, width, height, options } = event.data;

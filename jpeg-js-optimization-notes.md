@@ -2,7 +2,7 @@
 
 Date: 2026-05-25
 
-Scope: `jpeg-js-decoder.js`, the CPU-only JPEG decoder path. The changes below do not use WebGL, WebGPU, WebAssembly, browser image decoding, or extra runtime libraries.
+Scope: `src/decoders/jpeg-js-decoder.js`, the CPU-only JPEG decoder path. The changes below do not use WebGL, WebGPU, WebAssembly, browser image decoding, or extra runtime libraries.
 
 ## Research Inputs
 

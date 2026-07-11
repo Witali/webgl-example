@@ -10,9 +10,10 @@
   "use strict";
 
   const SCRIPT_URL = resolveScriptUrl();
+  const PROJECT_ROOT_URL = new URL("../../", SCRIPT_URL).href;
   const DEFAULT_SHADER_URLS = {
-    vertex: resolveProjectUrl("shaders/cube.vert.glsl?v=material-maps"),
-    fragment: resolveProjectUrl("shaders/cube.frag.glsl?v=material-maps"),
+    vertex: resolveProjectUrl("src/shaders/cube.vert.glsl?v=material-maps"),
+    fragment: resolveProjectUrl("src/shaders/cube.frag.glsl?v=material-maps"),
   };
   const DEFAULT_TESSELLATION_SEGMENTS = 64;
   const DEFAULT_GEOMETRY_DISPLACEMENT_SCALE = 0.28;
@@ -645,11 +646,7 @@
       return path;
     }
 
-    if (path.startsWith("/")) {
-      return new URL(path.slice(1), SCRIPT_URL).href;
-    }
-
-    return new URL(path, SCRIPT_URL).href;
+    return new URL(path, PROJECT_ROOT_URL).href;
   }
 
   function resolveScriptUrl() {

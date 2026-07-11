@@ -125,7 +125,7 @@ function processImage() {
   const dithering = ditheringSelect.value;
   const colorSpace = colorSpaceSelect.value;
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
-  const worker = new Worker("./palette-worker.js?v=color-space-1");
+  const worker = new Worker("./src/palette/palette-worker.js?v=src-layout-1");
 
   state.worker = worker;
   setStatus(

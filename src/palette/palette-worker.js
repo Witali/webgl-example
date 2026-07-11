@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("./palette-quantizer.js?v=color-space-1");
+importScripts("./palette-quantizer.js?v=src-layout-1");
 
 self.addEventListener("message", (event) => {
   const { pixels, width, height, colorCount, dithering, colorSpace } = event.data;

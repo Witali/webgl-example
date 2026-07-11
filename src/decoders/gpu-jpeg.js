@@ -21,8 +21,8 @@
   ];
 
   const GPU_SHADER_URLS = {
-    vertex: resolveShaderUrl("shaders/jpeg-idct.vert.glsl"),
-    fragment: resolveShaderUrl("shaders/jpeg-idct.frag.glsl"),
+    vertex: resolveShaderUrl("../shaders/jpeg-idct.vert.glsl"),
+    fragment: resolveShaderUrl("../shaders/jpeg-idct.frag.glsl"),
   };
   let gpuShaderSourcePromise = null;
   let gpuShaderSources = null;

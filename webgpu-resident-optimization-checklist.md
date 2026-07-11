@@ -2,7 +2,7 @@
 
 Date: 2026-05-25
 
-Scope: `GPU-Huff+GPU-IDCT resident` in `webgpu-jpeg.js`.
+Scope: `GPU-Huff+GPU-IDCT resident` in `src/decoders/webgpu-jpeg.js`.
 
 Rule for keeping a feature: retain an experiment only when measured resident decode speed improves by more than `1.3x` against the current resident baseline.
 

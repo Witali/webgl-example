@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { convertZxSpectrum, convertModeX, zxBitmapOffset } = require("../retro-converter.js");
+const { convertZxSpectrum, convertModeX, zxBitmapOffset } = require("../src/retro/retro-converter.js");
 
 test("writes a hardware-sized ZX Spectrum .scr with interleaved bitmap rows", () => {
   const pixels = solidPixels(256, 192, [0, 0, 0, 255]);
