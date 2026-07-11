@@ -16,6 +16,7 @@
 
   const MAX_PALETTE_SAMPLE_PIXELS = 32768;
   const DITHERING_MODES = new Set(["none", "pattern-2x2", "pattern", "floyd-steinberg"]);
+  const PALETTE_MODES = new Set(["explicit", "vector"]);
   const BAYER_2X2 = [
     0, 2,
     3, 1,
@@ -34,6 +35,10 @@
     const localColorCount = Number(options.localColorCount || 4);
     const globalColorCount = Number(options.globalColorCount || 256);
     const paletteColorBits = Number(options.paletteColorBits || 24);
+    const paletteMode = options.paletteMode || "explicit";
+    const vectorDeviation = options.vectorDeviation === undefined
+      ? 0.05
+      : Number(options.vectorDeviation);
     const colorSpace = options.colorSpace || "oklab";
     const dithering = options.dithering || "none";
     const diversity = options.diversity === undefined ? 0 : Number(options.diversity);
@@ -47,22 +52,44 @@
       localColorCount,
       globalColorCount,
       paletteColorBits,
+      paletteMode,
+      vectorDeviation,
       colorSpace,
       dithering,
       diversity
     );
 
     const sample = samplePixels(sourcePixels, MAX_PALETTE_SAMPLE_PIXELS);
-    const quantizedSample = paletteQuantizer.quantizeImage(
-      sample,
-      sample.length / 4,
-      1,
-      globalColorCount,
-      { colorSpace, dithering: "none", diversity, maxIterations: 16 }
-    );
-    const activePalette = quantizedSample.palette.length > 0
-      ? quantizedSample.palette.map((color) => applyPaletteColorDepth(color, paletteColorBits))
-      : [{ r: 0, g: 0, b: 0, hex: "#000000", count: 0 }];
+    let activePalette;
+    let paletteVectors = [];
+    let vectorDeviationActual = 0;
+    let iterations = 0;
+
+    if (paletteMode === "vector") {
+      const vectorPalette = createAdaptiveVectorPalette(
+        sample,
+        globalColorCount,
+        paletteColorBits,
+        vectorDeviation
+      );
+
+      activePalette = vectorPalette.palette;
+      paletteVectors = vectorPalette.vectors;
+      vectorDeviationActual = vectorPalette.actualDeviation;
+    } else {
+      const quantizedSample = paletteQuantizer.quantizeImage(
+        sample,
+        sample.length / 4,
+        1,
+        globalColorCount,
+        { colorSpace, dithering: "none", diversity, maxIterations: 16 }
+      );
+
+      activePalette = quantizedSample.palette.length > 0
+        ? quantizedSample.palette.map((color) => applyPaletteColorDepth(color, paletteColorBits))
+        : [{ r: 0, g: 0, b: 0, hex: "#000000", count: 0 }];
+      iterations = quantizedSample.iterations;
+    }
     const palette = padPalette(activePalette, globalColorCount);
     const palettePoints = activePalette.map((color) => colorPoint(color.r, color.g, color.b, colorSpace));
     const paletteDistances = createPaletteDistanceMatrix(palettePoints);
@@ -269,7 +296,9 @@
 
     const globalIndexBits = Math.log2(globalColorCount);
     const localIndexBits = Math.log2(localColorCount);
-    const globalPaletteBits = globalColorCount * paletteColorBits;
+    const globalPaletteBits = paletteMode === "vector"
+      ? paletteVectors.length * 2 * paletteColorBits
+      : globalColorCount * paletteColorBits;
     const blockPaletteBits = blockCount * localColorCount * globalIndexBits;
     const pixelDataBits = width * height * localIndexBits;
     const payloadBits = globalPaletteBits + blockPaletteBits + pixelDataBits;
@@ -293,6 +322,11 @@
       localColorCount,
       globalColorCount,
       paletteColorBits,
+      paletteMode,
+      vectorDeviation,
+      paletteVectorCount: paletteVectors.length,
+      paletteVectors,
+      vectorDeviationActual,
       activeGlobalColorCount: activePalette.length,
       globalIndexBits,
       localIndexBits,
@@ -302,7 +336,7 @@
       colorSpace,
       dithering,
       diversity,
-      iterations: quantizedSample.iterations,
+      iterations,
       storage: {
         globalPaletteBits,
         blockPaletteBits,
@@ -783,6 +817,247 @@
     return target === sample.length ? sample : sample.slice(0, target);
   }
 
+  function createAdaptiveVectorPalette(
+    sourcePixels,
+    globalColorCount,
+    paletteColorBits,
+    allowedDeviation
+  ) {
+    const points = [];
+    const minimum = [255, 255, 255];
+    const maximum = [0, 0, 0];
+
+    for (let offset = 0; offset < sourcePixels.length; offset += 4) {
+      if (sourcePixels[offset + 3] === 0) {
+        continue;
+      }
+
+      const point = [
+        sourcePixels[offset],
+        sourcePixels[offset + 1],
+        sourcePixels[offset + 2],
+      ];
+
+      points.push(point);
+
+      for (let channel = 0; channel < 3; channel += 1) {
+        minimum[channel] = Math.min(minimum[channel], point[channel]);
+        maximum[channel] = Math.max(maximum[channel], point[channel]);
+      }
+    }
+
+    if (points.length === 0) {
+      points.push([0, 0, 0]);
+      minimum.fill(0);
+      maximum.fill(0);
+    }
+
+    const overallRange = Math.max(1, Math.sqrt(
+      (maximum[0] - minimum[0]) ** 2 +
+      (maximum[1] - minimum[1]) ** 2 +
+      (maximum[2] - minimum[2]) ** 2
+    ));
+    const maximumVectors = Math.max(
+      1,
+      Math.min(Math.floor(globalColorCount / 2), points.length)
+    );
+    const clusters = [fitVectorCluster(points)];
+
+    while (clusters.length < maximumVectors) {
+      let splitIndex = -1;
+      let worstDeviation = allowedDeviation;
+
+      for (let index = 0; index < clusters.length; index += 1) {
+        const cluster = clusters[index];
+        const relativeDeviation = cluster.rmsDeviation / overallRange;
+
+        if (
+          cluster.points.length >= 4 &&
+          relativeDeviation > worstDeviation
+        ) {
+          splitIndex = index;
+          worstDeviation = relativeDeviation;
+        }
+      }
+
+      if (splitIndex < 0) {
+        break;
+      }
+
+      const cluster = clusters[splitIndex];
+      const sorted = cluster.points.slice().sort((left, right) => (
+        projectPoint(left, cluster.mean, cluster.axis) -
+        projectPoint(right, cluster.mean, cluster.axis)
+      ));
+      const middle = Math.floor(sorted.length / 2);
+      const left = fitVectorCluster(sorted.slice(0, middle));
+      const right = fitVectorCluster(sorted.slice(middle));
+
+      clusters.splice(splitIndex, 1, left, right);
+    }
+
+    const vectors = clusters.map((cluster) => {
+      const start = applyPaletteColorDepth(
+        createPaletteColor(pointOnAxis(cluster.mean, cluster.axis, cluster.minimumProjection)),
+        paletteColorBits
+      );
+      const end = applyPaletteColorDepth(
+        createPaletteColor(pointOnAxis(cluster.mean, cluster.axis, cluster.maximumProjection)),
+        paletteColorBits
+      );
+
+      return { start, end };
+    });
+    const palette = interpolatePaletteVectors(vectors, globalColorCount);
+    const actualDeviation = Math.max(
+      0,
+      ...clusters.map((cluster) => cluster.rmsDeviation / overallRange)
+    );
+
+    return { palette, vectors, actualDeviation };
+  }
+
+  function fitVectorCluster(points) {
+    const mean = [0, 0, 0];
+
+    for (const point of points) {
+      mean[0] += point[0];
+      mean[1] += point[1];
+      mean[2] += point[2];
+    }
+
+    mean[0] /= points.length;
+    mean[1] /= points.length;
+    mean[2] /= points.length;
+
+    const covariance = [
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ];
+
+    for (const point of points) {
+      const difference = [
+        point[0] - mean[0],
+        point[1] - mean[1],
+        point[2] - mean[2],
+      ];
+
+      for (let row = 0; row < 3; row += 1) {
+        for (let column = row; column < 3; column += 1) {
+          covariance[row][column] += difference[row] * difference[column];
+
+          if (row !== column) {
+            covariance[column][row] = covariance[row][column];
+          }
+        }
+      }
+    }
+
+    const axis = principalAxis(covariance);
+    let minimumProjection = Infinity;
+    let maximumProjection = -Infinity;
+    let perpendicularSquared = 0;
+
+    for (const point of points) {
+      const projection = projectPoint(point, mean, axis);
+      const projected = pointOnAxis(mean, axis, projection);
+
+      minimumProjection = Math.min(minimumProjection, projection);
+      maximumProjection = Math.max(maximumProjection, projection);
+      perpendicularSquared +=
+        (point[0] - projected[0]) ** 2 +
+        (point[1] - projected[1]) ** 2 +
+        (point[2] - projected[2]) ** 2;
+    }
+
+    return {
+      points,
+      mean,
+      axis,
+      minimumProjection,
+      maximumProjection,
+      rmsDeviation: Math.sqrt(perpendicularSquared / points.length),
+    };
+  }
+
+  function principalAxis(covariance) {
+    let largestDiagonal = 0;
+
+    for (let channel = 1; channel < 3; channel += 1) {
+      if (covariance[channel][channel] > covariance[largestDiagonal][largestDiagonal]) {
+        largestDiagonal = channel;
+      }
+    }
+
+    let axis = [0, 0, 0];
+
+    axis[largestDiagonal] = 1;
+
+    for (let iteration = 0; iteration < 16; iteration += 1) {
+      const next = [
+        covariance[0][0] * axis[0] + covariance[0][1] * axis[1] + covariance[0][2] * axis[2],
+        covariance[1][0] * axis[0] + covariance[1][1] * axis[1] + covariance[1][2] * axis[2],
+        covariance[2][0] * axis[0] + covariance[2][1] * axis[1] + covariance[2][2] * axis[2],
+      ];
+      const length = Math.sqrt(next[0] ** 2 + next[1] ** 2 + next[2] ** 2);
+
+      if (length < 1e-12) {
+        break;
+      }
+
+      axis = next.map((value) => value / length);
+    }
+
+    return axis;
+  }
+
+  function projectPoint(point, mean, axis) {
+    return (
+      (point[0] - mean[0]) * axis[0] +
+      (point[1] - mean[1]) * axis[1] +
+      (point[2] - mean[2]) * axis[2]
+    );
+  }
+
+  function pointOnAxis(mean, axis, projection) {
+    return [
+      mean[0] + axis[0] * projection,
+      mean[1] + axis[1] * projection,
+      mean[2] + axis[2] * projection,
+    ];
+  }
+
+  function createPaletteColor(point) {
+    const red = clampByte(Math.round(point[0]));
+    const green = clampByte(Math.round(point[1]));
+    const blue = clampByte(Math.round(point[2]));
+
+    return { r: red, g: green, b: blue, hex: rgbToHex(red, green, blue), count: 0 };
+  }
+
+  function interpolatePaletteVectors(vectors, globalColorCount) {
+    const palette = [];
+    const colorsPerVector = Math.floor(globalColorCount / vectors.length);
+    const extraColors = globalColorCount % vectors.length;
+
+    for (let vectorIndex = 0; vectorIndex < vectors.length; vectorIndex += 1) {
+      const vector = vectors[vectorIndex];
+      const colorCount = colorsPerVector + (vectorIndex < extraColors ? 1 : 0);
+
+      for (let colorIndex = 0; colorIndex < colorCount; colorIndex += 1) {
+        const ratio = colorCount <= 1 ? 0 : colorIndex / (colorCount - 1);
+        const red = Math.round(vector.start.r + (vector.end.r - vector.start.r) * ratio);
+        const green = Math.round(vector.start.g + (vector.end.g - vector.start.g) * ratio);
+        const blue = Math.round(vector.start.b + (vector.end.b - vector.start.b) * ratio);
+
+        palette.push({ r: red, g: green, b: blue, hex: rgbToHex(red, green, blue), count: 0 });
+      }
+    }
+
+    return palette;
+  }
+
   function padPalette(activePalette, requestedCount) {
     const palette = activePalette.map(copyPaletteColor);
 
@@ -905,6 +1180,8 @@
     localColorCount,
     globalColorCount,
     paletteColorBits,
+    paletteMode,
+    vectorDeviation,
     colorSpace,
     dithering,
     diversity
@@ -931,6 +1208,14 @@
 
     if (paletteColorBits !== 16 && paletteColorBits !== 24) {
       throw new RangeError("paletteColorBits must be either 16 or 24");
+    }
+
+    if (!PALETTE_MODES.has(paletteMode)) {
+      throw new RangeError(`Unsupported palette mode: ${paletteMode}`);
+    }
+
+    if (!Number.isFinite(vectorDeviation) || vectorDeviation < 0.01 || vectorDeviation > 0.5) {
+      throw new RangeError("vectorDeviation must be between 0.01 and 0.5");
     }
 
     if (!DITHERING_MODES.has(dithering)) {

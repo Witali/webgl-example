@@ -73,6 +73,70 @@ test("supports 512-color and 1024-color common palettes", () => {
   assert.ok(Array.from(palette1024.blockPaletteIndices).every((index) => index < 1024));
 });
 
+test("builds an adaptive multi-vector palette from the requested deviation", () => {
+  const values = [];
+
+  for (let y = 0; y < 16; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      values.push([x * 17, y * 17, x * y % 16 * 17, 255]);
+    }
+  }
+
+  const settings = {
+    blockSize: 8,
+    localColorCount: 4,
+    globalColorCount: 64,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    colorSpace: "rgb",
+  };
+  const precise = compressImage(pixels(values), 16, 16, {
+    ...settings,
+    vectorDeviation: 0.02,
+  });
+  const compact = compressImage(pixels(values), 16, 16, {
+    ...settings,
+    vectorDeviation: 0.10,
+  });
+
+  assert.equal(precise.paletteMode, "vector");
+  assert.equal(precise.palette.length, settings.globalColorCount);
+  assert.ok(precise.paletteVectorCount >= compact.paletteVectorCount);
+  assert.equal(precise.paletteVectors.length, precise.paletteVectorCount);
+  assert.equal(
+    precise.storage.globalPaletteBits,
+    precise.paletteVectorCount * 2 * settings.paletteColorBits
+  );
+  assert.ok(precise.paletteVectors.every((vector) => vector.start && vector.end));
+});
+
+test("represents colors on one RGB axis with one stored vector", () => {
+  const values = [];
+
+  for (let value = 0; value < 16; value += 1) {
+    const channel = value * 17;
+
+    values.push([channel, channel, channel, 255]);
+  }
+
+  const result = compressImage(pixels(values), 4, 4, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 16,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorDeviation: 0.02,
+    colorSpace: "rgb",
+  });
+
+  assert.equal(result.paletteVectorCount, 1);
+  assert.equal(result.storage.globalPaletteBits, 48);
+  assert.deepEqual(result.palette[0], {
+    r: 0, g: 0, b: 0, hex: "#000000", count: result.palette[0].count, active: true,
+  });
+  assert.equal(result.palette[15].hex, "#ffffff");
+});
+
 test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () => {
   const source = pixels([
     [123, 201, 77, 255], [123, 201, 77, 255],
@@ -317,6 +381,25 @@ test("rejects non-power-of-two format settings", () => {
       diversity: 1.1,
     }),
     /diversity must be between 0 and 1/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteMode: "curves",
+    }),
+    /Unsupported palette mode/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteMode: "vector",
+      vectorDeviation: 0.005,
+    }),
+    /vectorDeviation must be between 0.01 and 0.5/
   );
 });
 
