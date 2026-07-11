@@ -44,33 +44,129 @@ test("calculates the tightly packed 256-color, four-color block layout", () => {
   assert.equal(result.storage.totalBytes, 788);
 });
 
-test("supports 512-color and 1024-color common palettes", () => {
+test("supports 1024-color and 4096-color common palettes", () => {
   const source = new Uint8ClampedArray(8 * 8 * 4);
 
   for (let offset = 0; offset < source.length; offset += 4) {
     source[offset + 3] = 255;
   }
 
-  const palette512 = compressImage(source, 8, 8, {
-    blockSize: 8,
-    localColorCount: 4,
-    globalColorCount: 512,
-  });
   const palette1024 = compressImage(source, 8, 8, {
     blockSize: 8,
     localColorCount: 4,
     globalColorCount: 1024,
   });
+  const palette4096 = compressImage(source, 8, 8, {
+    blockSize: 8,
+    localColorCount: 4,
+    globalColorCount: 4096,
+  });
 
-  assert.equal(palette512.globalIndexBits, 9);
-  assert.equal(palette512.storage.globalPaletteBytes, 1536);
-  assert.equal(palette512.storage.blockPaletteBytes, 5);
-  assert.equal(palette512.storage.totalBytes, 1557);
   assert.equal(palette1024.globalIndexBits, 10);
   assert.equal(palette1024.storage.globalPaletteBytes, 3072);
   assert.equal(palette1024.storage.blockPaletteBytes, 5);
   assert.equal(palette1024.storage.totalBytes, 3093);
   assert.ok(Array.from(palette1024.blockPaletteIndices).every((index) => index < 1024));
+  assert.equal(palette4096.globalIndexBits, 12);
+  assert.equal(palette4096.storage.globalPaletteBytes, 12288);
+  assert.equal(palette4096.storage.blockPaletteBytes, 6);
+  assert.equal(palette4096.storage.totalBytes, 12310);
+  assert.ok(Array.from(palette4096.blockPaletteIndices).every((index) => index < 4096));
+});
+
+test("builds an adaptive multi-vector palette from the requested deviation", () => {
+  const values = [];
+
+  for (let y = 0; y < 16; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      values.push([x * 17, y * 17, x * y % 16 * 17, 255]);
+    }
+  }
+
+  const settings = {
+    blockSize: 8,
+    localColorCount: 4,
+    globalColorCount: 64,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    colorSpace: "rgb",
+  };
+  const precise = compressImage(pixels(values), 16, 16, {
+    ...settings,
+    vectorDeviation: 0.02,
+  });
+  const compact = compressImage(pixels(values), 16, 16, {
+    ...settings,
+    vectorDeviation: 0.10,
+  });
+
+  assert.equal(precise.paletteMode, "vector");
+  assert.equal(precise.palette.length, settings.globalColorCount);
+  assert.ok(precise.paletteVectorCount >= compact.paletteVectorCount);
+  assert.equal(precise.paletteVectors.length, precise.paletteVectorCount);
+  assert.equal(
+    precise.storage.globalPaletteBits,
+    precise.paletteVectorCount * 2 * settings.paletteColorBits
+  );
+  assert.ok(precise.paletteVectors.every((vector) => vector.start && vector.end));
+});
+
+test("represents colors on one RGB axis with one stored vector", () => {
+  const values = [];
+
+  for (let value = 0; value < 16; value += 1) {
+    const channel = value * 17;
+
+    values.push([channel, channel, channel, 255]);
+  }
+
+  const result = compressImage(pixels(values), 4, 4, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 16,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorDeviation: 0.02,
+    colorSpace: "rgb",
+  });
+
+  assert.equal(result.paletteVectorCount, 1);
+  assert.equal(result.storage.globalPaletteBits, 48);
+  assert.deepEqual(result.palette[0], {
+    r: 0, g: 0, b: 0, hex: "#000000", count: result.palette[0].count, active: true,
+  });
+  assert.equal(result.palette[15].hex, "#ffffff");
+});
+
+test("builds and interpolates adaptive vectors in OKLab", () => {
+  const values = [];
+
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      values.push([x * 36, y * 36, (7 - x) * 36, 255]);
+    }
+  }
+
+  const result = compressImage(pixels(values), 8, 8, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 32,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorColorSpace: "oklab",
+    vectorDeviation: 0.01,
+    colorSpace: "oklab",
+  });
+
+  assert.equal(result.vectorColorSpace, "oklab");
+  assert.equal(result.vectorDeviation, 0.01);
+  assert.ok(result.paletteVectorCount > 0);
+  assert.equal(result.palette.length, 32);
+  assert.ok(result.palette.every((color) => (
+    color.r >= 0 && color.r <= 255 &&
+    color.g >= 0 && color.g <= 255 &&
+    color.b >= 0 && color.b <= 255
+  )));
 });
 
 test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () => {
@@ -247,6 +343,39 @@ test("does not diffuse Floyd-Steinberg error across block palette boundaries", (
   assert.deepEqual(rightBlockIndices(resultA), rightBlockIndices(resultB));
 });
 
+test("fills every block palette slot with distinct source-adjacent colors", () => {
+  const values = [];
+  const ramp = [0, 36, 72, 108, 144, 180, 216, 255];
+
+  for (let y = 0; y < 4; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      const value = x < 12 ? ramp[(x + y * 3) % ramp.length] : 119;
+
+      values.push([value, value, value, 255]);
+    }
+  }
+
+  for (const dithering of ["none", "pattern", "floyd-steinberg"]) {
+    const result = compressImage(pixels(values), 16, 4, {
+      blockSize: 4,
+      localColorCount: 4,
+      globalColorCount: 8,
+      colorSpace: "rgb",
+      dithering,
+    });
+    const flatBlockPalette = result.blockPaletteIndices.slice(12, 16);
+    const closestToSource = result.palette
+      .slice(0, result.activeGlobalColorCount)
+      .map((color, index) => ({ index, distance: Math.abs(color.r - 119) }))
+      .sort((left, right) => left.distance - right.distance || left.index - right.index)
+      .slice(0, 4)
+      .map((entry) => entry.index);
+
+    assert.equal(new Set(flatBlockPalette).size, 4, dithering);
+    assert.deepEqual(new Set(flatBlockPalette), new Set(closestToSource), dithering);
+  }
+});
+
 test("diversity weighting gives rare colors more influence in the common palette", () => {
   const values = [];
 
@@ -288,8 +417,8 @@ test("rejects non-power-of-two format settings", () => {
     /localColorCount must be a power of two/
   );
   assert.throws(
-    () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 2, globalColorCount: 2048 }),
-    /globalColorCount must be a power of two from 2 to 1024/
+    () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 2, globalColorCount: 8192 }),
+    /globalColorCount must be a power of two from 2 to 4096/
   );
   assert.throws(
     () => compressImage(source, 2, 2, {
@@ -317,6 +446,35 @@ test("rejects non-power-of-two format settings", () => {
       diversity: 1.1,
     }),
     /diversity must be between 0 and 1/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteMode: "curves",
+    }),
+    /Unsupported palette mode/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteMode: "vector",
+      vectorDeviation: 0.005,
+    }),
+    /vectorDeviation must be between 0.01 and 0.5/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteMode: "vector",
+      vectorColorSpace: "xyz",
+    }),
+    /Unsupported vector color space/
   );
 });
 

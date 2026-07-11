@@ -14,12 +14,12 @@
 })(typeof self !== "undefined" ? self : globalThis, function (blockPaletteCodec) {
   "use strict";
 
-  const BPAL_HEADER_BYTES = 12;
+  const BPAL_HEADER_BYTES = 14;
   const DEFAULT_PROFILES = [
+    { blockSize: 4, localColorCount: 16, globalColorCount: 4096, paletteColorBits: 24 },
     { blockSize: 4, localColorCount: 16, globalColorCount: 1024, paletteColorBits: 24 },
-    { blockSize: 4, localColorCount: 16, globalColorCount: 512, paletteColorBits: 24 },
-    { blockSize: 4, localColorCount: 8, globalColorCount: 512, paletteColorBits: 24 },
-    { blockSize: 8, localColorCount: 16, globalColorCount: 512, paletteColorBits: 24 },
+    { blockSize: 4, localColorCount: 8, globalColorCount: 1024, paletteColorBits: 24 },
+    { blockSize: 8, localColorCount: 16, globalColorCount: 1024, paletteColorBits: 24 },
     { blockSize: 8, localColorCount: 8, globalColorCount: 256, paletteColorBits: 24 },
     { blockSize: 8, localColorCount: 8, globalColorCount: 256, paletteColorBits: 16 },
     { blockSize: 8, localColorCount: 4, globalColorCount: 256, paletteColorBits: 16 },
@@ -51,6 +51,9 @@
       colorSpace: searchOptions.colorSpace || "oklab",
       dithering: searchOptions.dithering || "none",
       diversity: searchOptions.diversity === undefined ? 0 : searchOptions.diversity,
+      paletteMode: searchOptions.paletteMode || "explicit",
+      vectorColorSpace: searchOptions.vectorColorSpace || "rgb",
+      vectorDeviation: searchOptions.vectorDeviation === undefined ? 0.05 : searchOptions.vectorDeviation,
     };
     const candidates = [];
 

@@ -632,5 +632,5 @@
     }
   }
 
-  return { quantizeImage, srgbToOklab };
+  return { quantizeImage, srgbToOklab, oklabToSrgb };
 });
