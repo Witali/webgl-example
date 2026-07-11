@@ -17,6 +17,7 @@
   const MAX_PALETTE_SAMPLE_PIXELS = 32768;
   const DITHERING_MODES = new Set(["none", "pattern-2x2", "pattern", "floyd-steinberg"]);
   const PALETTE_MODES = new Set(["explicit", "vector"]);
+  const VECTOR_COLOR_SPACES = new Set(["rgb", "oklab"]);
   const BAYER_2X2 = [
     0, 2,
     3, 1,
@@ -36,6 +37,7 @@
     const globalColorCount = Number(options.globalColorCount || 256);
     const paletteColorBits = Number(options.paletteColorBits || 24);
     const paletteMode = options.paletteMode || "explicit";
+    const vectorColorSpace = options.vectorColorSpace || "rgb";
     const vectorDeviation = options.vectorDeviation === undefined
       ? 0.05
       : Number(options.vectorDeviation);
@@ -53,6 +55,7 @@
       globalColorCount,
       paletteColorBits,
       paletteMode,
+      vectorColorSpace,
       vectorDeviation,
       colorSpace,
       dithering,
@@ -70,6 +73,7 @@
         sample,
         globalColorCount,
         paletteColorBits,
+        vectorColorSpace,
         vectorDeviation
       );
 
@@ -326,6 +330,7 @@
       globalColorCount,
       paletteColorBits,
       paletteMode,
+      vectorColorSpace,
       vectorDeviation,
       paletteVectorCount: paletteVectors.length,
       paletteVectors,
@@ -899,6 +904,7 @@
     sourcePixels,
     globalColorCount,
     paletteColorBits,
+    vectorColorSpace,
     allowedDeviation
   ) {
     const points = [];
@@ -910,11 +916,17 @@
         continue;
       }
 
-      const point = [
-        sourcePixels[offset],
-        sourcePixels[offset + 1],
-        sourcePixels[offset + 2],
-      ];
+      const point = vectorColorSpace === "oklab"
+        ? paletteQuantizer.srgbToOklab(
+          sourcePixels[offset],
+          sourcePixels[offset + 1],
+          sourcePixels[offset + 2]
+        )
+        : [
+          sourcePixels[offset],
+          sourcePixels[offset + 1],
+          sourcePixels[offset + 2],
+        ];
 
       points.push(point);
 
@@ -930,7 +942,7 @@
       maximum.fill(0);
     }
 
-    const overallRange = Math.max(1, Math.sqrt(
+    const overallRange = Math.max(1e-12, Math.sqrt(
       (maximum[0] - minimum[0]) ** 2 +
       (maximum[1] - minimum[1]) ** 2 +
       (maximum[2] - minimum[2]) ** 2
@@ -976,17 +988,23 @@
 
     const vectors = clusters.map((cluster) => {
       const start = applyPaletteColorDepth(
-        createPaletteColor(pointOnAxis(cluster.mean, cluster.axis, cluster.minimumProjection)),
+        createPaletteColor(
+          pointOnAxis(cluster.mean, cluster.axis, cluster.minimumProjection),
+          vectorColorSpace
+        ),
         paletteColorBits
       );
       const end = applyPaletteColorDepth(
-        createPaletteColor(pointOnAxis(cluster.mean, cluster.axis, cluster.maximumProjection)),
+        createPaletteColor(
+          pointOnAxis(cluster.mean, cluster.axis, cluster.maximumProjection),
+          vectorColorSpace
+        ),
         paletteColorBits
       );
 
       return { start, end };
     });
-    const palette = interpolatePaletteVectors(vectors, globalColorCount);
+    const palette = interpolatePaletteVectors(vectors, globalColorCount, vectorColorSpace);
     const actualDeviation = Math.max(
       0,
       ...clusters.map((cluster) => cluster.rmsDeviation / overallRange)
@@ -1106,15 +1124,18 @@
     ];
   }
 
-  function createPaletteColor(point) {
-    const red = clampByte(Math.round(point[0]));
-    const green = clampByte(Math.round(point[1]));
-    const blue = clampByte(Math.round(point[2]));
+  function createPaletteColor(point, vectorColorSpace) {
+    const channels = vectorColorSpace === "oklab"
+      ? paletteQuantizer.oklabToSrgb(point[0], point[1], point[2])
+      : point;
+    const red = clampByte(Math.round(channels[0]));
+    const green = clampByte(Math.round(channels[1]));
+    const blue = clampByte(Math.round(channels[2]));
 
     return { r: red, g: green, b: blue, hex: rgbToHex(red, green, blue), count: 0 };
   }
 
-  function interpolatePaletteVectors(vectors, globalColorCount) {
+  function interpolatePaletteVectors(vectors, globalColorCount, vectorColorSpace) {
     const palette = [];
     const colorsPerVector = Math.floor(globalColorCount / vectors.length);
     const extraColors = globalColorCount % vectors.length;
@@ -1122,12 +1143,26 @@
     for (let vectorIndex = 0; vectorIndex < vectors.length; vectorIndex += 1) {
       const vector = vectors[vectorIndex];
       const colorCount = colorsPerVector + (vectorIndex < extraColors ? 1 : 0);
+      const start = vectorColorSpace === "oklab"
+        ? paletteQuantizer.srgbToOklab(vector.start.r, vector.start.g, vector.start.b)
+        : [vector.start.r, vector.start.g, vector.start.b];
+      const end = vectorColorSpace === "oklab"
+        ? paletteQuantizer.srgbToOklab(vector.end.r, vector.end.g, vector.end.b)
+        : [vector.end.r, vector.end.g, vector.end.b];
 
       for (let colorIndex = 0; colorIndex < colorCount; colorIndex += 1) {
         const ratio = colorCount <= 1 ? 0 : colorIndex / (colorCount - 1);
-        const red = Math.round(vector.start.r + (vector.end.r - vector.start.r) * ratio);
-        const green = Math.round(vector.start.g + (vector.end.g - vector.start.g) * ratio);
-        const blue = Math.round(vector.start.b + (vector.end.b - vector.start.b) * ratio);
+        const point = [
+          start[0] + (end[0] - start[0]) * ratio,
+          start[1] + (end[1] - start[1]) * ratio,
+          start[2] + (end[2] - start[2]) * ratio,
+        ];
+        const channels = vectorColorSpace === "oklab"
+          ? paletteQuantizer.oklabToSrgb(point[0], point[1], point[2])
+          : point;
+        const red = clampByte(Math.round(channels[0]));
+        const green = clampByte(Math.round(channels[1]));
+        const blue = clampByte(Math.round(channels[2]));
 
         palette.push({ r: red, g: green, b: blue, hex: rgbToHex(red, green, blue), count: 0 });
       }
@@ -1259,6 +1294,7 @@
     globalColorCount,
     paletteColorBits,
     paletteMode,
+    vectorColorSpace,
     vectorDeviation,
     colorSpace,
     dithering,
@@ -1290,6 +1326,10 @@
 
     if (!PALETTE_MODES.has(paletteMode)) {
       throw new RangeError(`Unsupported palette mode: ${paletteMode}`);
+    }
+
+    if (!VECTOR_COLOR_SPACES.has(vectorColorSpace)) {
+      throw new RangeError(`Unsupported vector color space: ${vectorColorSpace}`);
     }
 
     if (!Number.isFinite(vectorDeviation) || vectorDeviation < 0.01 || vectorDeviation > 0.5) {

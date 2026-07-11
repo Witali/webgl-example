@@ -137,6 +137,37 @@ test("represents colors on one RGB axis with one stored vector", () => {
   assert.equal(result.palette[15].hex, "#ffffff");
 });
 
+test("builds and interpolates adaptive vectors in OKLab", () => {
+  const values = [];
+
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      values.push([x * 36, y * 36, (7 - x) * 36, 255]);
+    }
+  }
+
+  const result = compressImage(pixels(values), 8, 8, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 32,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorColorSpace: "oklab",
+    vectorDeviation: 0.01,
+    colorSpace: "oklab",
+  });
+
+  assert.equal(result.vectorColorSpace, "oklab");
+  assert.equal(result.vectorDeviation, 0.01);
+  assert.ok(result.paletteVectorCount > 0);
+  assert.equal(result.palette.length, 32);
+  assert.ok(result.palette.every((color) => (
+    color.r >= 0 && color.r <= 255 &&
+    color.g >= 0 && color.g <= 255 &&
+    color.b >= 0 && color.b <= 255
+  )));
+});
+
 test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () => {
   const source = pixels([
     [123, 201, 77, 255], [123, 201, 77, 255],
@@ -431,6 +462,16 @@ test("rejects non-power-of-two format settings", () => {
       vectorDeviation: 0.005,
     }),
     /vectorDeviation must be between 0.01 and 0.5/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteMode: "vector",
+      vectorColorSpace: "xyz",
+    }),
+    /Unsupported vector color space/
   );
 });
 
