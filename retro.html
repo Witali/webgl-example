@@ -44,6 +44,16 @@
           </label>
 
           <label>
+            Поворот
+            <select id="image-rotation" name="rotation">
+              <option value="0">Без поворота</option>
+              <option value="90">90° по часовой</option>
+              <option value="180">180°</option>
+              <option value="270">270° по часовой</option>
+            </select>
+          </label>
+
+          <label>
             Цветовое пространство
             <select id="color-space" name="colorSpace">
               <option value="oklab" selected>OKLab</option>
@@ -55,14 +65,26 @@
             Дизеринг
             <select id="dithering" name="dithering">
               <option value="none">Без дизеринга</option>
+              <option value="pattern-2x2">Паттерн Bayer 2×2</option>
               <option value="pattern">Паттерн Bayer 4×4</option>
               <option value="floyd-steinberg">Floyd–Steinberg</option>
             </select>
           </label>
 
+          <label id="auto-optimize-label" class="auto-optimize-label">
+            <input id="auto-optimize" name="autoOptimize" type="checkbox" checked>
+            <span>
+              <strong>Автоподбор ZX</strong>
+              <small>15 родных цветов · 8 вариантов</small>
+            </span>
+          </label>
+
           <label class="range-label">
             <span>Цветов Mode X <output id="color-count-value" for="color-count">256</output></span>
-            <input id="color-count" name="colorCount" type="range" min="2" max="256" step="1" value="256">
+            <span class="range-control-row">
+              <input id="color-count" name="colorCount" type="range" min="2" max="256" step="1" value="256">
+              <input id="color-count-number" class="number-input" type="number" min="2" max="256" step="1" value="256" aria-label="Количество цветов Mode X числом">
+            </span>
           </label>
 
           <button id="upload-button" type="button">Загрузить изображение</button>
@@ -131,6 +153,6 @@
       </section>
     </main>
 
-    <script src="./src/pages/retro-page.js?v=src-layout-1"></script>
+    <script src="./src/pages/retro-page.js?v=rotation-1"></script>
   </body>
 </html>

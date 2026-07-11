@@ -12,8 +12,12 @@
   "use strict";
 
   const DEFAULT_MAX_ITERATIONS = 24;
-  const DITHERING_MODES = new Set(["none", "pattern", "floyd-steinberg"]);
+  const DITHERING_MODES = new Set(["none", "pattern-2x2", "pattern", "floyd-steinberg"]);
   const COLOR_SPACES = new Set(["oklab", "rgb"]);
+  const BAYER_2X2 = [
+    0, 2,
+    3, 1,
+  ];
   const BAYER_4X4 = [
     0, 8, 2, 10,
     12, 4, 14, 6,
@@ -31,6 +35,7 @@
       : DEFAULT_MAX_ITERATIONS;
     const dithering = settings.dithering || "none";
     const colorSpace = settings.colorSpace || "oklab";
+    const diversity = settings.diversity === undefined ? 0 : Number(settings.diversity);
 
     if (!DITHERING_MODES.has(dithering)) {
       throw new RangeError(`Unsupported dithering mode: ${dithering}`);
@@ -38,6 +43,10 @@
 
     if (!COLOR_SPACES.has(colorSpace)) {
       throw new RangeError(`Unsupported color space: ${colorSpace}`);
+    }
+
+    if (!Number.isFinite(diversity) || diversity < 0 || diversity > 1) {
+      throw new RangeError("diversity must be between 0 and 1");
     }
 
     const histogram = buildHistogram(sourcePixels);
@@ -53,6 +62,7 @@
         meanSquaredError: 0,
         dithering,
         colorSpace,
+        diversity,
       };
     }
 
@@ -63,7 +73,8 @@
     const clusteringColors = colorSpace === "oklab"
       ? histogram.colors.map((color) => srgbToOklab(color[0], color[1], color[2]))
       : histogram.colors;
-    const centroids = initializeCentroids(clusteringColors, histogram.weights, colorCount);
+    const clusteringWeights = createClusteringWeights(histogram.weights, diversity);
+    const centroids = initializeCentroids(clusteringColors, clusteringWeights, colorCount);
     const assignments = new Int16Array(histogram.colors.length);
 
     assignments.fill(-1);
@@ -74,7 +85,7 @@
       const changed = assignColors(clusteringColors, centroids, assignments);
       const moved = updateCentroids(
         clusteringColors,
-        histogram.weights,
+        clusteringWeights,
         assignments,
         centroids
       );
@@ -120,7 +131,23 @@
       meanSquaredError: calculatePixelMeanSquaredError(sourcePixels, outputPixels),
       dithering,
       colorSpace,
+      diversity,
     };
+  }
+
+  function createClusteringWeights(pixelCounts, diversity) {
+    if (diversity === 0) {
+      return pixelCounts;
+    }
+
+    const exponent = 1 - diversity;
+    const weights = new Float64Array(pixelCounts.length);
+
+    for (let index = 0; index < pixelCounts.length; index += 1) {
+      weights[index] = Math.pow(pixelCounts[index], exponent);
+    }
+
+    return weights;
   }
 
   function buildHistogram(pixels) {
@@ -299,8 +326,19 @@
     dithering,
     colorSpace
   ) {
-    if (dithering === "pattern") {
-      return applyPatternDithering(sourcePixels, width, height, palette, colorSpace);
+    if (dithering === "pattern-2x2" || dithering === "pattern") {
+      const matrix = dithering === "pattern-2x2" ? BAYER_2X2 : BAYER_4X4;
+      const matrixSize = dithering === "pattern-2x2" ? 2 : 4;
+
+      return applyPatternDithering(
+        sourcePixels,
+        width,
+        height,
+        palette,
+        colorSpace,
+        matrix,
+        matrixSize
+      );
     }
 
     if (dithering === "floyd-steinberg") {
@@ -334,7 +372,15 @@
     return output;
   }
 
-  function applyPatternDithering(sourcePixels, width, height, palette, colorSpace) {
+  function applyPatternDithering(
+    sourcePixels,
+    width,
+    height,
+    palette,
+    colorSpace,
+    matrix,
+    matrixSize
+  ) {
     const output = new Uint8ClampedArray(sourcePixels.length);
     const palettePoints = createPalettePoints(palette, colorSpace);
 
@@ -349,7 +395,8 @@
         }
 
         const threshold = (
-          (BAYER_4X4[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5
+          (matrix[(y % matrixSize) * matrixSize + (x % matrixSize)] + 0.5) /
+          matrix.length - 0.5
         ) * PATTERN_STRENGTH;
         const paletteIndex = findNearestPaletteIndex(
           sourcePixels[index] + threshold,

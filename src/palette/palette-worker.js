@@ -1,9 +1,9 @@
 "use strict";
 
-importScripts("./palette-quantizer.js?v=src-layout-1");
+importScripts("./palette-quantizer.js?v=bayer2-1");
 
 self.addEventListener("message", (event) => {
-  const { pixels, width, height, colorCount, dithering, colorSpace } = event.data;
+  const { pixels, width, height, colorCount, dithering, colorSpace, diversity } = event.data;
   const startedAt = performance.now();
 
   try {
@@ -12,7 +12,7 @@ self.addEventListener("message", (event) => {
       width,
       height,
       colorCount,
-      { dithering, colorSpace }
+      { dithering, colorSpace, diversity }
     );
 
     result.durationMs = performance.now() - startedAt;

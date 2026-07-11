@@ -5,6 +5,9 @@ const imageSelect = document.getElementById("image-url");
 const colorSpaceSelect = document.getElementById("color-space");
 const colorCountInput = document.getElementById("color-count");
 const colorCountValue = document.getElementById("color-count-value");
+const colorCountNumberInput = document.getElementById("color-count-number");
+const diversityInput = document.getElementById("diversity");
+const diversityValue = document.getElementById("diversity-value");
 const ditheringSelect = document.getElementById("dithering");
 const uploadButton = document.getElementById("upload-button");
 const fileInput = document.getElementById("image-file");
@@ -43,6 +46,28 @@ colorSpaceSelect.addEventListener("change", processImage);
 
 colorCountInput.addEventListener("input", () => {
   updateColorCountLabel();
+  scheduleProcessing();
+});
+
+colorCountNumberInput.addEventListener("input", () => {
+  const value = colorCountFromNumberInput(false);
+
+  if (value === null) {
+    scheduleNumberCommit();
+    return;
+  }
+
+  colorCountInput.value = String(value);
+  colorCountValue.textContent = String(value);
+  scheduleProcessing();
+});
+
+colorCountNumberInput.addEventListener("change", () => {
+  commitNumberInput();
+});
+
+diversityInput.addEventListener("input", () => {
+  updateDiversityLabel();
   window.clearTimeout(state.debounceTimer);
   state.debounceTimer = window.setTimeout(processImage, 180);
 });
@@ -73,6 +98,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 updateColorCountLabel();
+updateDiversityLabel();
 loadImage(imageSelect.value, optionLabel(imageSelect.selectedOptions[0])).catch(showError);
 
 async function loadImage(url, name) {
@@ -124,12 +150,13 @@ function processImage() {
   const colorCount = getColorCount();
   const dithering = ditheringSelect.value;
   const colorSpace = colorSpaceSelect.value;
+  const diversity = getDiversity();
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
-  const worker = new Worker("./src/palette/palette-worker.js?v=src-layout-1");
+  const worker = new Worker("./src/palette/palette-worker.js?v=bayer2-1");
 
   state.worker = worker;
   setStatus(
-    `Кластеризация в ${getColorSpaceLabel(colorSpace)} · ${colorCount} кластеров · ${getDitheringLabel(dithering)}…`,
+    `Кластеризация в ${getColorSpaceLabel(colorSpace)} · ${colorCount} кластеров · ${getDiversityLabel()} · ${getDitheringLabel(dithering)}…`,
     "busy"
   );
 
@@ -148,7 +175,7 @@ function processImage() {
     stopWorker();
     setBusy(false);
     setStatus(
-      `Готово: ${formatInteger(event.data.uniqueColorCount)} исходных цветов сведены к ${event.data.palette.length} · ${getColorSpaceLabel(event.data.colorSpace)} · ${getDitheringLabel(event.data.dithering)}.`
+      `Готово: ${formatInteger(event.data.uniqueColorCount)} исходных цветов сведены к ${event.data.palette.length} · ${getColorSpaceLabel(event.data.colorSpace)} · ${getDiversityLabel()} · ${getDitheringLabel(event.data.dithering)}.`
     );
   });
 
@@ -166,6 +193,7 @@ function processImage() {
     colorCount,
     dithering,
     colorSpace,
+    diversity,
   }, [sourceCopy.buffer]);
 }
 
@@ -200,6 +228,7 @@ function renderResult(result) {
     rmse: Math.sqrt(result.meanSquaredError),
     dithering: result.dithering,
     colorSpace: result.colorSpace,
+    diversity: result.diversity,
   };
 }
 
@@ -325,11 +354,72 @@ function getColorCount() {
 }
 
 function updateColorCountLabel() {
-  colorCountValue.textContent = String(getColorCount());
+  const colorCount = getColorCount();
+
+  colorCountValue.textContent = String(colorCount);
+  colorCountNumberInput.value = String(colorCount);
+}
+
+function colorCountFromNumberInput(clampToRange) {
+  const value = Number(colorCountNumberInput.value);
+
+  if (!Number.isFinite(value) || colorCountNumberInput.value === "") {
+    return null;
+  }
+
+  if (!clampToRange && (value < 2 || value > 32)) {
+    return null;
+  }
+
+  return Math.max(2, Math.min(32, Math.round(value)));
+}
+
+function scheduleProcessing() {
+  window.clearTimeout(state.debounceTimer);
+  state.debounceTimer = window.setTimeout(processImage, 180);
+}
+
+function scheduleNumberCommit() {
+  window.clearTimeout(state.debounceTimer);
+  state.debounceTimer = window.setTimeout(commitNumberInput, 700);
+}
+
+function commitNumberInput() {
+  const value = colorCountFromNumberInput(true);
+
+  colorCountInput.value = String(value === null ? getColorCount() : value);
+  updateColorCountLabel();
+  scheduleProcessing();
+}
+
+function getDiversityLevel() {
+  return Math.max(0, Math.min(6, Math.round(Number(diversityInput.value) || 0)));
+}
+
+function getDiversity() {
+  return getDiversityLevel() / 6;
+}
+
+function updateDiversityLabel() {
+  diversityValue.textContent = getDiversityLabel();
+}
+
+function getDiversityLabel() {
+  return [
+    "Макс. точность",
+    "Точность 5/6",
+    "Точность 4/6",
+    "Баланс",
+    "Разнообразие 4/6",
+    "Разнообразие 5/6",
+    "Макс. разнообразие",
+  ][getDiversityLevel()];
 }
 
 function getDitheringLabel(mode) {
   switch (mode) {
+    case "pattern-2x2":
+      return "паттерн Bayer 2×2";
     case "pattern":
       return "паттерн Bayer 4×4";
     case "floyd-steinberg":

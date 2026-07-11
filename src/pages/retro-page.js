@@ -4,10 +4,14 @@ const controls = document.getElementById("controls");
 const imageSelect = document.getElementById("image-url");
 const modeSelect = document.getElementById("retro-mode");
 const fitSelect = document.getElementById("image-fit");
+const rotationSelect = document.getElementById("image-rotation");
 const colorSpaceSelect = document.getElementById("color-space");
 const ditheringSelect = document.getElementById("dithering");
+const autoOptimizeLabel = document.getElementById("auto-optimize-label");
+const autoOptimizeInput = document.getElementById("auto-optimize");
 const colorCountInput = document.getElementById("color-count");
 const colorCountValue = document.getElementById("color-count-value");
+const colorCountNumberInput = document.getElementById("color-count-number");
 const uploadButton = document.getElementById("upload-button");
 const fileInput = document.getElementById("image-file");
 const processButton = document.getElementById("process-button");
@@ -68,12 +72,31 @@ modeSelect.addEventListener("change", () => {
   processImage();
 });
 fitSelect.addEventListener("change", processImage);
+rotationSelect.addEventListener("change", processImage);
 colorSpaceSelect.addEventListener("change", processImage);
 ditheringSelect.addEventListener("change", processImage);
+autoOptimizeInput.addEventListener("change", () => {
+  updateModeUi();
+  processImage();
+});
 colorCountInput.addEventListener("input", () => {
   updateColorCountLabel();
-  window.clearTimeout(state.debounceTimer);
-  state.debounceTimer = window.setTimeout(processImage, 180);
+  scheduleProcessing();
+});
+colorCountNumberInput.addEventListener("input", () => {
+  const value = colorCountFromNumberInput(false);
+
+  if (value === null) {
+    scheduleNumberCommit();
+    return;
+  }
+
+  colorCountInput.value = String(value);
+  colorCountValue.textContent = String(value);
+  scheduleProcessing();
+});
+colorCountNumberInput.addEventListener("change", () => {
+  commitNumberInput();
 });
 
 uploadButton.addEventListener("click", () => fileInput.click());
@@ -150,18 +173,37 @@ function processImage() {
   const processingId = ++state.processingId;
   const mode = modeSelect.value;
   const profile = PROFILES[mode];
-  const prepared = prepareTargetImage(profile.width, profile.height, fitSelect.value);
+  const autoOptimize = mode === "zx-spectrum" && autoOptimizeInput.checked;
+  const rotation = getRotation();
+  const prepared = prepareTargetImage(
+    profile.width,
+    profile.height,
+    fitSelect.value,
+    rotation
+  );
   const sourceCopy = new Uint8ClampedArray(prepared.data);
-  const worker = new Worker("./src/retro/retro-worker.js?v=src-layout-1");
+  const worker = new Worker("./src/retro/retro-worker.js?v=mix-average-1");
 
   state.worker = worker;
-  setStatus(
-    `${profile.name}: ${profile.width}×${profile.height} · ${colorSpaceLabel(colorSpaceSelect.value)} · ${ditheringLabel(ditheringSelect.value)}…`,
-    "busy"
-  );
+  setStatus(autoOptimize
+    ? `Автоподбор ${profile.name}: проверка 8 вариантов по родной палитре · ${rotationLabel(rotation)}…`
+    : `${profile.name}: ${profile.width}×${profile.height} · ${rotationLabel(rotation)} · ${colorSpaceLabel(colorSpaceSelect.value)} · ${ditheringLabel(ditheringSelect.value)}…`,
+  "busy");
 
   worker.addEventListener("message", (event) => {
     if (worker !== state.worker || processingId !== state.processingId) {
+      return;
+    }
+
+    if (event.data.progress) {
+      const progress = event.data.progress;
+
+      setStatus(
+        `Автоподбор ZX Spectrum: ${progress.completed}/${progress.total} · ` +
+        `${colorSpaceLabel(progress.candidate.colorSpace)} · ` +
+        `${ditheringLabel(progress.candidate.dithering)}…`,
+        "busy"
+      );
       return;
     }
 
@@ -171,11 +213,21 @@ function processImage() {
       return;
     }
 
+    event.data.rotation = rotation;
     renderResult(event.data);
     stopWorker();
     setBusy(false);
+    const colorSummary = event.data.mode === "zx-spectrum"
+      ? `${event.data.palette.length} из ${event.data.hardwarePaletteSize} родных цветов`
+      : `${event.data.palette.length} цветов`;
+
     setStatus(
-      `Готово: ${profile.name} · ${event.data.palette.length} цветов · ${formatBytes(hardwareByteLength(event.data))}.`
+      event.data.optimization
+        ? `Готово: ${profile.name} · автоподбор ${optimizationLabel(event.data.optimization.recommended)} · ` +
+          `${rotationLabel(rotation)} · ${colorSummary} · ${formatBytes(hardwareByteLength(event.data))}.`
+        : `Готово: ${profile.name} · ${colorSpaceLabel(event.data.colorSpace)} · ` +
+          `${ditheringLabel(event.data.dithering)} · ${rotationLabel(rotation)} · ${colorSummary} · ` +
+          `${formatBytes(hardwareByteLength(event.data))}.`
     );
   });
 
@@ -195,11 +247,12 @@ function processImage() {
       colorSpace: colorSpaceSelect.value,
       dithering: ditheringSelect.value,
       colorCount: getColorCount(),
+      autoOptimize,
     },
   }, [sourceCopy.buffer]);
 }
 
-function prepareTargetImage(width, height, fit) {
+function prepareTargetImage(width, height, fit, rotation) {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d", { willReadFrequently: true });
   const sourceWidth = sourceCanvas.width;
@@ -212,29 +265,42 @@ function prepareTargetImage(width, height, fit) {
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
 
+  const swapsDimensions = rotation === 90 || rotation === 270;
+  const rotatedWidth = swapsDimensions ? sourceHeight : sourceWidth;
+  const rotatedHeight = swapsDimensions ? sourceWidth : sourceHeight;
+  let drawWidth;
+  let drawHeight;
+
   if (fit === "stretch") {
-    context.drawImage(sourceCanvas, 0, 0, width, height);
+    drawWidth = swapsDimensions ? height : width;
+    drawHeight = swapsDimensions ? width : height;
   } else {
     const scale = fit === "contain"
-      ? Math.min(width / sourceWidth, height / sourceHeight)
-      : Math.max(width / sourceWidth, height / sourceHeight);
-    const drawWidth = sourceWidth * scale;
-    const drawHeight = sourceHeight * scale;
+      ? Math.min(width / rotatedWidth, height / rotatedHeight)
+      : Math.max(width / rotatedWidth, height / rotatedHeight);
 
-    context.drawImage(
-      sourceCanvas,
-      (width - drawWidth) / 2,
-      (height - drawHeight) / 2,
-      drawWidth,
-      drawHeight
-    );
+    drawWidth = sourceWidth * scale;
+    drawHeight = sourceHeight * scale;
   }
+
+  context.save();
+  context.translate(width / 2, height / 2);
+  context.rotate(rotation * Math.PI / 180);
+  context.drawImage(sourceCanvas, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+  context.restore();
 
   return context.getImageData(0, 0, width, height);
 }
 
 function renderResult(result) {
   const profile = PROFILES[result.mode];
+  const optimized = result.optimization && result.optimization.recommended;
+  const rotationSuffix = result.rotation ? ` · поворот ${result.rotation}°` : "";
+
+  if (optimized) {
+    colorSpaceSelect.value = optimized.colorSpace;
+    ditheringSelect.value = optimized.dithering;
+  }
 
   state.result = result;
   resultCanvas.width = result.width;
@@ -247,14 +313,18 @@ function renderResult(result) {
     0
   );
 
-  metricProfile.textContent = profile.name;
+  metricProfile.textContent = optimized ? `${profile.name} · авто` : profile.name;
   metricSize.textContent = `${result.width} × ${result.height}`;
-  metricColors.textContent = formatInteger(result.palette.length);
+  metricColors.textContent = result.mode === "zx-spectrum"
+    ? `${formatInteger(result.palette.length)} / ${result.hardwarePaletteSize}`
+    : formatInteger(result.palette.length);
   metricBytes.textContent = formatBytes(hardwareByteLength(result));
   metricTime.textContent = `${result.durationMs.toFixed(1)} мс`;
-  resultCaption.textContent = `${profile.name} · аппаратный предпросмотр`;
+  resultCaption.textContent = optimized
+    ? `${profile.name} · ${colorSpaceLabel(optimized.colorSpace)} · ${ditheringLabel(optimized.dithering)}${rotationSuffix}`
+    : `${profile.name} · ${colorSpaceLabel(result.colorSpace)} · ${ditheringLabel(result.dithering)}${rotationSuffix}`;
   paletteSummary.textContent = result.mode === "zx-spectrum"
-    ? "2 цвета на блок 8×8"
+    ? `${result.hardwarePaletteSize} родных цветов · 2 цвета на блок 8×8`
     : `${result.palette.length} из 256 регистров DAC`;
   renderPalette(result.palette, result.width * result.height);
 
@@ -274,6 +344,10 @@ function renderResult(result) {
     paletteBytes: result.palette6Bit ? result.palette6Bit.length : 0,
     colorSpace: result.colorSpace,
     dithering: result.dithering,
+    hardwarePaletteSize: result.hardwarePaletteSize || 0,
+    paletteSource: result.paletteSource || null,
+    rotation: result.rotation || 0,
+    optimization: optimized || null,
   };
 }
 
@@ -302,19 +376,31 @@ function renderPalette(palette, totalPixels) {
 
 function updateModeUi() {
   const isZx = modeSelect.value === "zx-spectrum";
+  const autoOptimize = isZx && autoOptimizeInput.checked;
 
   colorCountInput.disabled = state.busy || isZx;
+  colorCountNumberInput.disabled = state.busy || isZx;
+  colorCountNumberInput.hidden = isZx;
+  colorSpaceSelect.disabled = state.busy || autoOptimize;
+  ditheringSelect.disabled = state.busy || autoOptimize;
+  autoOptimizeInput.disabled = state.busy || !isZx;
+  autoOptimizeLabel.hidden = !isZx;
   colorCountValue.textContent = isZx ? "15 · 2/8×8" : String(getColorCount());
   formatNoteTitle.textContent = isZx ? "ZX Spectrum .scr" : "Mode X raw planar + VGA DAC";
   formatNoteText.textContent = isZx
-    ? "6144 байта bitmap в аппаратном порядке строк и 768 байт атрибутов 8×8; FLASH выключен."
+    ? autoOptimize
+      ? "15 родных цветов; пары PAPER/INK выбираются по усреднённому цвету смеси; RGB/OKLab × 4 режима дизеринга."
+      : "6144 байта bitmap в аппаратном порядке строк и 768 байт атрибутов 8×8; FLASH выключен."
     : "Четыре плана по 19 200 байт идут последовательно; .pal содержит 256 RGB-троек по 6 бит на канал.";
   downloadPaletteButton.hidden = isZx;
 }
 
 function updateColorCountLabel() {
   if (modeSelect.value !== "zx-spectrum") {
-    colorCountValue.textContent = String(getColorCount());
+    const colorCount = getColorCount();
+
+    colorCountValue.textContent = String(colorCount);
+    colorCountNumberInput.value = String(colorCount);
   }
 }
 
@@ -373,6 +459,7 @@ function setBusy(busy) {
   imageSelect.disabled = busy;
   modeSelect.disabled = busy;
   fitSelect.disabled = busy;
+  rotationSelect.disabled = busy;
   colorSpaceSelect.disabled = busy;
   ditheringSelect.disabled = busy;
   uploadButton.disabled = busy;
@@ -443,11 +530,57 @@ function getColorCount() {
   return Math.max(2, Math.min(256, Math.round(Number(colorCountInput.value) || 256)));
 }
 
+function getRotation() {
+  const rotation = Number(rotationSelect.value);
+
+  return [0, 90, 180, 270].includes(rotation) ? rotation : 0;
+}
+
+function rotationLabel(rotation) {
+  return rotation === 0 ? "без поворота" : `поворот ${rotation}°`;
+}
+
+function colorCountFromNumberInput(clampToRange) {
+  const value = Number(colorCountNumberInput.value);
+
+  if (!Number.isFinite(value) || colorCountNumberInput.value === "") {
+    return null;
+  }
+
+  if (!clampToRange && (value < 2 || value > 256)) {
+    return null;
+  }
+
+  return Math.max(2, Math.min(256, Math.round(value)));
+}
+
+function scheduleProcessing() {
+  window.clearTimeout(state.debounceTimer);
+  state.debounceTimer = window.setTimeout(processImage, 180);
+}
+
+function scheduleNumberCommit() {
+  window.clearTimeout(state.debounceTimer);
+  state.debounceTimer = window.setTimeout(commitNumberInput, 700);
+}
+
+function commitNumberInput() {
+  const value = colorCountFromNumberInput(true);
+
+  colorCountInput.value = String(value === null ? getColorCount() : value);
+  updateColorCountLabel();
+  scheduleProcessing();
+}
+
 function colorSpaceLabel(value) {
   return value === "rgb" ? "RGB" : "OKLab";
 }
 
 function ditheringLabel(value) {
+  if (value === "pattern-2x2") {
+    return "Bayer 2×2";
+  }
+
   if (value === "pattern") {
     return "Bayer 4×4";
   }
@@ -457,6 +590,10 @@ function ditheringLabel(value) {
   }
 
   return "без дизеринга";
+}
+
+function optimizationLabel(candidate) {
+  return `${colorSpaceLabel(candidate.colorSpace)} · ${ditheringLabel(candidate.dithering)}`;
 }
 
 function formatBytes(value) {

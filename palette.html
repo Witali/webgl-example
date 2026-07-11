@@ -36,13 +36,26 @@
 
           <label class="range-label">
             <span>Цветов в палитре <output id="color-count-value" for="color-count">8</output></span>
-            <input id="color-count" name="colorCount" type="range" min="2" max="32" step="1" value="8">
+            <span class="range-control-row">
+              <input id="color-count" name="colorCount" type="range" min="2" max="32" step="1" value="8">
+              <input id="color-count-number" class="number-input" type="number" min="2" max="32" step="1" value="8" aria-label="Количество цветов числом">
+            </span>
+          </label>
+
+          <label class="range-label diversity-label">
+            <span class="diversity-caption">
+              <b>Точность</b>
+              <output id="diversity-value" for="diversity">Баланс</output>
+              <b>Разнообразие</b>
+            </span>
+            <input id="diversity" name="diversity" type="range" min="0" max="6" step="1" value="3">
           </label>
 
           <label>
             Дизеринг
             <select id="dithering" name="dithering">
               <option value="none">Без дизеринга</option>
+              <option value="pattern-2x2">Паттерн Bayer 2×2</option>
               <option value="pattern">Паттерн Bayer 4×4</option>
               <option value="floyd-steinberg">Floyd–Steinberg</option>
             </select>
@@ -107,6 +120,6 @@
       </section>
     </main>
 
-    <script src="./src/pages/palette-page.js?v=src-layout-1"></script>
+    <script src="./src/pages/palette-page.js?v=bayer2-1"></script>
   </body>
 </html>

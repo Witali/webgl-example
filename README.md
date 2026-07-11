@@ -22,7 +22,8 @@ Open `index.html` through a local server to choose between:
   selectable color count, optional Bayer or Floyd-Steinberg dithering, local
   image uploads, and PNG export
 - `retro.html` for ZX Spectrum 256x192 `.scr` export and PC VGA Mode X
-  320x240 four-plane image data with a separate 6-bit DAC palette
+  320x240 four-plane image data with a separate 6-bit DAC palette; source
+  images can be rotated by 90, 180, or 270 degrees before fitting
 - `benchmarks.html` for native browser, JS-only, WASM, WASM+GPU, GPU, WebGPU
   WGSL, optional WebGPU resident, and WebP decode timings
 - `browser-specs.html` for WebGPU, WebGL, and WebAssembly capability checks
@@ -38,6 +39,31 @@ Browser runtime sources are organized under `src/`:
 
 Node utilities, browser harnesses, and automated checks remain in `tools/` and
 `tests/`; vendored third-party runtime files remain in `assets/vendor/`.
+
+## Optimized ZX Spectrum export
+
+The CLI optimizer converts any FFmpeg-readable image to a hardware-sized
+ZX Spectrum `.scr`. It maps the source directly to the 15 unique colors of the
+fixed hardware palette and tests RGB and OKLab matching with no dithering,
+Bayer 2x2, Bayer 4x4, and Floyd-Steinberg output. Attribute pairs are selected
+by the color produced after spatially averaging their dithered mixture, rather
+than by the nearest endpoint alone. The winner balances multi-scale OKLab error
+with RGB RMSE averaged over 8x8 blocks.
+
+The ZX Spectrum mode on `retro.html` exposes the same algorithm through the
+enabled-by-default **Auto optimize ZX** control. Manual color-space and
+dithering controls become available when auto optimization is switched off.
+
+FFmpeg must be available on `PATH`:
+
+```powershell
+npm run optimize:zx -- input.png --output zx-output --name landscape --fit cover
+```
+
+`--fit` accepts `cover` (the default), `contain`, or `stretch`. The command
+writes the recommended `.scr`, its decoded PNG preview, the prepared source
+PNG, a JSON report for all eight candidates, and the lowest-perceptual-error
+alternative when it differs from the recommendation.
 
 ## `GpuJpegDecoder`
 

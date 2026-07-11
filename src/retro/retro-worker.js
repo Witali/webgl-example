@@ -1,7 +1,8 @@
 "use strict";
 
-importScripts("../palette/palette-quantizer.js?v=src-layout-1");
-importScripts("./retro-converter.js?v=src-layout-1");
+importScripts("../palette/palette-quantizer.js?v=mix-average-1");
+importScripts("./retro-converter.js?v=mix-average-1");
+importScripts("./zx-optimizer.js?v=mix-average-1");
 
 self.addEventListener("message", (event) => {
   const { mode, pixels, width, height, options } = event.data;
@@ -9,9 +10,19 @@ self.addEventListener("message", (event) => {
 
   try {
     const sourcePixels = new Uint8ClampedArray(pixels);
-    const result = mode === "zx-spectrum"
-      ? self.RetroConverter.convertZxSpectrum(sourcePixels, width, height, options)
-      : self.RetroConverter.convertModeX(sourcePixels, width, height, options);
+    let result;
+
+    if (mode === "zx-spectrum" && options.autoOptimize) {
+      result = self.ZxOptimizer.optimizeZxSpectrum(sourcePixels, width, height, {
+        onProgress(progress) {
+          self.postMessage({ progress });
+        },
+      }).result;
+    } else if (mode === "zx-spectrum") {
+      result = self.RetroConverter.convertZxSpectrum(sourcePixels, width, height, options);
+    } else {
+      result = self.RetroConverter.convertModeX(sourcePixels, width, height, options);
+    }
     const transfers = [result.pixels.buffer];
 
     if (result.screen) {

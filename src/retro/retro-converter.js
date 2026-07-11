@@ -22,6 +22,10 @@
   const ZX_HEIGHT = 192;
   const MODE_X_WIDTH = 320;
   const MODE_X_HEIGHT = 240;
+  const BAYER_2X2 = [
+    0, 2,
+    3, 1,
+  ];
   const BAYER_4X4 = [
     0, 8, 2, 10,
     12, 4, 14, 6,
@@ -29,6 +33,7 @@
     15, 7, 13, 5,
   ];
   const ZX_PALETTE = createZxPalette();
+  const ZX_UNIQUE_PALETTE = createUniquePalette(ZX_PALETTE);
 
   function convertZxSpectrum(sourcePixels, width, height, options) {
     validateDimensions(sourcePixels, width, height, ZX_WIDTH, ZX_HEIGHT, "ZX Spectrum");
@@ -39,7 +44,13 @@
     const pixels = flattenTransparency(sourcePixels);
     const sourcePoints = createSourcePoints(pixels, colorSpace);
     const palettePoints = ZX_PALETTE.map((color) => toPoint(color.r, color.g, color.b, colorSpace));
-    const blocks = chooseZxAttributeBlocks(sourcePoints, palettePoints);
+    const blocks = chooseZxAttributeBlocks(
+      pixels,
+      sourcePoints,
+      palettePoints,
+      dithering,
+      colorSpace
+    );
     const inkBits = renderZxInkBits(pixels, sourcePoints, blocks, palettePoints, colorSpace, dithering);
     const outputPixels = new Uint8ClampedArray(pixels.length);
     const screen = new Uint8Array(6912);
@@ -92,6 +103,8 @@
       screen,
       colorSpace,
       dithering,
+      hardwarePaletteSize: ZX_UNIQUE_PALETTE.length,
+      paletteSource: "zx-spectrum-native",
       binaryDescription: "ZX Spectrum .scr: 6144 bitmap bytes + 768 attribute bytes",
     };
   }
@@ -165,20 +178,57 @@
     };
   }
 
-  function chooseZxAttributeBlocks(sourcePoints, palettePoints) {
+  function chooseZxAttributeBlocks(
+    pixels,
+    sourcePoints,
+    palettePoints,
+    dithering,
+    colorSpace
+  ) {
     const blocks = new Array(32 * 24);
+    const supportsMixing = dithering !== "none";
+    const weights = distanceWeights(colorSpace);
 
     for (let blockY = 0; blockY < 24; blockY += 1) {
       for (let blockX = 0; blockX < 32; blockX += 1) {
+        const averageColor = [0, 0, 0];
         let best = null;
         let bestError = Infinity;
+
+        for (let localY = 0; localY < 8; localY += 1) {
+          const y = blockY * 8 + localY;
+
+          for (let localX = 0; localX < 8; localX += 1) {
+            const x = blockX * 8 + localX;
+            const pixelIndex = (y * ZX_WIDTH + x) * 4;
+
+            averageColor[0] += pixels[pixelIndex] / 64;
+            averageColor[1] += pixels[pixelIndex + 1] / 64;
+            averageColor[2] += pixels[pixelIndex + 2] / 64;
+          }
+        }
+
+        const averagePoint = toPoint(
+          averageColor[0],
+          averageColor[1],
+          averageColor[2],
+          colorSpace
+        );
 
         for (let bright = 0; bright <= 1; bright += 1) {
           for (let paper = 0; paper < 8; paper += 1) {
             for (let ink = paper; ink < 8; ink += 1) {
               const paperPoint = palettePoints[bright * 8 + paper];
               const inkPoint = palettePoints[bright * 8 + ink];
-              let error = 0;
+              const mixture = findBestMixture(
+                averagePoint,
+                ZX_PALETTE[bright * 8 + paper],
+                ZX_PALETTE[bright * 8 + ink],
+                colorSpace,
+                weights,
+                64
+              );
+              let error = supportsMixing ? mixture.error * 64 * 3 : 0;
 
               for (let localY = 0; localY < 8 && error < bestError; localY += 1) {
                 const y = blockY * 8 + localY;
@@ -187,13 +237,19 @@
                   const x = blockX * 8 + localX;
                   const point = sourcePoints[y * ZX_WIDTH + x];
 
-                  error += Math.min(squaredDistance(point, paperPoint), squaredDistance(point, inkPoint));
+                  error += pairDistance(
+                    point,
+                    paperPoint,
+                    inkPoint,
+                    supportsMixing,
+                    weights
+                  );
                 }
               }
 
               if (error < bestError) {
                 bestError = error;
-                best = { bright, paper, ink };
+                best = { bright, paper, ink, mixAmount: mixture.amount };
               }
             }
           }
@@ -212,6 +268,7 @@
     const nextErrors = new Float32Array((ZX_WIDTH + 2) * 3);
     let current = currentErrors;
     let next = nextErrors;
+    const weights = distanceWeights(colorSpace);
 
     for (let y = 0; y < ZX_HEIGHT; y += 1) {
       for (let x = 0; x < ZX_WIDTH; x += 1) {
@@ -224,12 +281,23 @@
         let green = pixels[rgbaIndex + 1];
         let blue = pixels[rgbaIndex + 2];
 
-        if (dithering === "pattern") {
-          const threshold = ((BAYER_4X4[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5) * 48;
+        let usesInk;
 
-          red += threshold;
-          green += threshold;
-          blue += threshold;
+        if (dithering === "pattern-2x2" || dithering === "pattern") {
+          const matrix = dithering === "pattern-2x2" ? BAYER_2X2 : BAYER_4X4;
+          const matrixSize = dithering === "pattern-2x2" ? 2 : 4;
+          const threshold = (
+            matrix[(y % matrixSize) * matrixSize + (x % matrixSize)] + 0.5
+          ) / matrix.length;
+
+          usesInk = findBestMixture(
+            sourcePoints[pixelIndex],
+            ZX_PALETTE[paperIndex],
+            ZX_PALETTE[inkIndex],
+            colorSpace,
+            weights,
+            matrix.length
+          ).amount > threshold;
         } else if (dithering === "floyd-steinberg") {
           const errorIndex = (x + 1) * 3;
 
@@ -238,11 +306,14 @@
           blue = clampByte(blue + current[errorIndex + 2]);
         }
 
-        const point = dithering === "none"
-          ? sourcePoints[pixelIndex]
-          : toPoint(red, green, blue, colorSpace);
-        const usesInk = squaredDistance(point, palettePoints[inkIndex]) <
-          squaredDistance(point, palettePoints[paperIndex]);
+        if (usesInk === undefined) {
+          const point = dithering === "none"
+            ? sourcePoints[pixelIndex]
+            : toPoint(red, green, blue, colorSpace);
+
+          usesInk = squaredDistance(point, palettePoints[inkIndex]) <
+            squaredDistance(point, palettePoints[paperIndex]);
+        }
 
         inkBits[pixelIndex] = usesInk ? 1 : 0;
 
@@ -359,6 +430,20 @@
     return colors;
   }
 
+  function createUniquePalette(colors) {
+    const uniqueColors = new Map();
+
+    for (const color of colors) {
+      uniqueColors.set(colorKey(color.r, color.g, color.b), color);
+    }
+
+    return Array.from(uniqueColors.values());
+  }
+
+  function getZxPalette() {
+    return ZX_UNIQUE_PALETTE.map((color) => ({ ...color }));
+  }
+
   function zxBitmapOffset(xByte, y) {
     return ((y & 0xc0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2) | xByte;
   }
@@ -377,6 +462,77 @@
     return first * first + second * second + third * third;
   }
 
+  function pairDistance(point, firstColor, secondColor, supportsMixing, weights) {
+    if (!supportsMixing) {
+      return Math.min(
+        squaredDistance(point, firstColor),
+        squaredDistance(point, secondColor)
+      );
+    }
+
+    const amount = segmentAmount(point, firstColor, secondColor, weights);
+    const first = point[0] - (firstColor[0] + (secondColor[0] - firstColor[0]) * amount);
+    const second = point[1] - (firstColor[1] + (secondColor[1] - firstColor[1]) * amount);
+    const third = point[2] - (firstColor[2] + (secondColor[2] - firstColor[2]) * amount);
+
+    return first * first * weights[0] +
+      second * second * weights[1] +
+      third * third * weights[2];
+  }
+
+  function segmentAmount(point, firstColor, secondColor, weights) {
+    const first = secondColor[0] - firstColor[0];
+    const second = secondColor[1] - firstColor[1];
+    const third = secondColor[2] - firstColor[2];
+    const lengthSquared = first * first * weights[0] +
+      second * second * weights[1] +
+      third * third * weights[2];
+
+    if (lengthSquared === 0) {
+      return 0;
+    }
+
+    const amount = (
+      (point[0] - firstColor[0]) * first * weights[0] +
+      (point[1] - firstColor[1]) * second * weights[1] +
+      (point[2] - firstColor[2]) * third * weights[2]
+    ) / lengthSquared;
+
+    return Math.max(0, Math.min(1, amount));
+  }
+
+  function distanceWeights(colorSpace) {
+    return colorSpace === "oklab" ? [1, 6, 6] : [1, 1, 1];
+  }
+
+  function findBestMixture(point, firstColor, secondColor, colorSpace, weights, steps) {
+    let bestAmount = 0;
+    let bestError = Infinity;
+
+    for (let step = 0; step <= steps; step += 1) {
+      const amount = step / steps;
+      const mixedPoint = toPoint(
+        firstColor.r + (secondColor.r - firstColor.r) * amount,
+        firstColor.g + (secondColor.g - firstColor.g) * amount,
+        firstColor.b + (secondColor.b - firstColor.b) * amount,
+        colorSpace
+      );
+      const first = point[0] - mixedPoint[0];
+      const second = point[1] - mixedPoint[1];
+      const third = point[2] - mixedPoint[2];
+      const error = first * first * weights[0] +
+        second * second * weights[1] +
+        third * third * weights[2];
+
+      if (error < bestError) {
+        bestError = error;
+        bestAmount = amount;
+      }
+    }
+
+    return { amount: bestAmount, error: bestError };
+  }
+
   function normalizeColorSpace(value) {
     if (value !== undefined && value !== "oklab" && value !== "rgb") {
       throw new RangeError(`Unsupported color space: ${value}`);
@@ -386,7 +542,10 @@
   }
 
   function normalizeDithering(value) {
-    if (value !== undefined && !["none", "pattern", "floyd-steinberg"].includes(value)) {
+    if (
+      value !== undefined &&
+      !["none", "pattern-2x2", "pattern", "floyd-steinberg"].includes(value)
+    ) {
       throw new RangeError(`Unsupported dithering mode: ${value}`);
     }
 
@@ -423,6 +582,7 @@
     convertZxSpectrum,
     convertModeX,
     zxBitmapOffset,
+    getZxPalette,
     profiles: {
       "zx-spectrum": { width: ZX_WIDTH, height: ZX_HEIGHT },
       "mode-x": { width: MODE_X_WIDTH, height: MODE_X_HEIGHT },

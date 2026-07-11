@@ -1,7 +1,13 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { convertZxSpectrum, convertModeX, zxBitmapOffset } = require("../src/retro/retro-converter.js");
+const {
+  convertZxSpectrum,
+  convertModeX,
+  zxBitmapOffset,
+  getZxPalette,
+} = require("../src/retro/retro-converter.js");
+const { optimizeZxSpectrum } = require("../src/retro/zx-optimizer.js");
 
 test("writes a hardware-sized ZX Spectrum .scr with interleaved bitmap rows", () => {
   const pixels = solidPixels(256, 192, [0, 0, 0, 255]);
@@ -22,6 +28,37 @@ test("writes a hardware-sized ZX Spectrum .scr with interleaved bitmap rows", ()
   assert.equal(result.screen[256], 0x80);
   assert.equal(result.screen[6144], 0x02);
   assert.equal(result.screen[6144] & 0x80, 0, "FLASH must stay disabled");
+  assert.equal(result.hardwarePaletteSize, 15);
+  assert.equal(result.paletteSource, "zx-spectrum-native");
+});
+
+test("uses only the 15 unique native ZX Spectrum colors", () => {
+  const nativePalette = getZxPalette();
+  const nativeColors = new Set(nativePalette.map((color) => `${color.r},${color.g},${color.b}`));
+  const pixels = new Uint8ClampedArray(256 * 192 * 4);
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const pixel = index / 4;
+
+    pixels[index] = pixel % 256;
+    pixels[index + 1] = Math.floor(pixel / 256) % 256;
+    pixels[index + 2] = pixel * 13 % 256;
+    pixels[index + 3] = 255;
+  }
+
+  const result = convertZxSpectrum(pixels, 256, 192, {
+    colorSpace: "oklab",
+    dithering: "floyd-steinberg",
+  });
+
+  assert.equal(nativePalette.length, 15);
+  assert.equal(nativeColors.size, 15);
+
+  for (let index = 0; index < result.pixels.length; index += 4) {
+    const key = `${result.pixels[index]},${result.pixels[index + 1]},${result.pixels[index + 2]}`;
+
+    assert.ok(nativeColors.has(key), `Unexpected non-ZX color: ${key}`);
+  }
 });
 
 test("keeps ZX output within one bright group and two colors per 8x8 block", () => {
@@ -45,6 +82,66 @@ test("keeps ZX output within one bright group and two colors per 8x8 block", () 
   assert.ok(((attribute >>> 3) & 7) <= 7);
   assert.ok((attribute & 7) <= 7);
   assert.equal(result.pixels.length, 256 * 192 * 4);
+});
+
+test("mixes a ZX color pair so averaged dithering is closer to brown", () => {
+  const brown = [120, 80, 55, 255];
+  const pixels = solidPixels(256, 192, brown);
+  const plain = convertZxSpectrum(pixels, 256, 192, {
+    colorSpace: "oklab",
+    dithering: "none",
+  });
+  const bayer2 = convertZxSpectrum(pixels, 256, 192, {
+    colorSpace: "oklab",
+    dithering: "pattern-2x2",
+  });
+  const bayer4 = convertZxSpectrum(pixels, 256, 192, {
+    colorSpace: "oklab",
+    dithering: "pattern",
+  });
+
+  assert.equal(plain.palette.length, 1);
+  assert.equal(bayer2.palette.length, 2);
+  assert.equal(bayer4.palette.length, 2);
+  assert.ok(averageColorError(bayer2.pixels, brown) < averageColorError(plain.pixels, brown));
+  assert.ok(averageColorError(bayer4.pixels, brown) < averageColorError(bayer2.pixels, brown));
+  assert.ok(bayer4.palette.every((color) => color.count < 256 * 192 * 0.8));
+});
+
+test("optimizes ZX color matching and dithering candidates", () => {
+  const pixels = new Uint8ClampedArray(256 * 192 * 4);
+  let progressUpdates = 0;
+
+  for (let y = 0; y < 192; y += 1) {
+    for (let x = 0; x < 256; x += 1) {
+      setPixel(pixels, 256, x, y, [
+        Math.round(x / 255 * 180),
+        Math.round(y / 191 * 220),
+        Math.round((x + y) / 446 * 255),
+        255,
+      ]);
+    }
+  }
+
+  const optimization = optimizeZxSpectrum(pixels, 256, 192, {
+    colorSpaces: ["rgb"],
+    ditheringModes: ["none", "pattern-2x2", "pattern"],
+    onProgress() {
+      progressUpdates += 1;
+    },
+  });
+
+  assert.equal(optimization.candidates.length, 3);
+  assert.equal(progressUpdates, 3);
+  assert.equal(optimization.result.screen.length, 6912);
+  assert.equal(optimization.result.optimization.candidateCount, 3);
+  assert.equal(optimization.recommended.rank, 1);
+  assert.equal(optimization.recommended.colorSpace, "rgb");
+  assert.ok(Number.isFinite(optimization.recommended.selectionScore));
+  assert.ok(
+    optimization.candidates[0].selectionScore <= optimization.candidates[2].selectionScore
+  );
+  assert.ok(optimization.candidates.some((candidate) => candidate.dithering === "pattern-2x2"));
 });
 
 test("creates four sequential 19200-byte Mode X planes and a VGA DAC palette", () => {
@@ -103,6 +200,19 @@ function solidPixels(width, height, color) {
 
 function setPixel(pixels, width, x, y, color) {
   pixels.set(color, (y * width + x) * 4);
+}
+
+function averageColorError(pixels, target) {
+  const average = [0, 0, 0];
+  const pixelCount = pixels.length / 4;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    average[0] += pixels[index] / pixelCount;
+    average[1] += pixels[index + 1] / pixelCount;
+    average[2] += pixels[index + 2] / pixelCount;
+  }
+
+  return average.reduce((sum, value, index) => sum + (value - target[index]) ** 2, 0);
 }
 
 function test(name, callback) {

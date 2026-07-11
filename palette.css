@@ -87,7 +87,8 @@ label {
 }
 
 select,
-button {
+button,
+input[type="number"] {
   min-height: 40px;
   border: 1px solid #313b48;
   border-radius: 7px;
@@ -139,6 +140,44 @@ button:disabled {
 .range-label output {
   color: #f4f8fc;
   font-variant-numeric: tabular-nums;
+}
+
+.range-label .range-control-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.range-control-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.number-input {
+  width: 76px;
+  padding: 0 8px;
+  color: #f4f8fc;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.number-input:disabled {
+  opacity: 0.45;
+}
+
+.diversity-label {
+  min-width: 310px;
+}
+
+.diversity-caption b {
+  color: #aab5c2;
+  font-size: inherit;
+}
+
+.diversity-caption output {
+  color: #83b8ff;
+  text-align: center;
+  text-transform: none;
 }
 
 input[type="range"] {

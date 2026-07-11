@@ -63,7 +63,7 @@ test("is deterministic and limits output colors to the requested count", () => {
   assert.deepEqual(Array.from(first.pixels), Array.from(second.pixels));
 });
 
-test("supports ordered pattern and Floyd-Steinberg output dithering", () => {
+test("supports Bayer 2x2, Bayer 4x4, and Floyd-Steinberg output dithering", () => {
   const values = [];
 
   for (let y = 0; y < 4; y += 1) {
@@ -76,13 +76,18 @@ test("supports ordered pattern and Floyd-Steinberg output dithering", () => {
 
   const source = pixels(values);
   const plain = quantizeImage(source, 16, 4, 2, { dithering: "none" });
+  const pattern2 = quantizeImage(source, 16, 4, 2, { dithering: "pattern-2x2" });
   const pattern = quantizeImage(source, 16, 4, 2, { dithering: "pattern" });
   const floyd = quantizeImage(source, 16, 4, 2, { dithering: "floyd-steinberg" });
 
+  assert.equal(pattern2.dithering, "pattern-2x2");
   assert.equal(pattern.dithering, "pattern");
   assert.equal(floyd.dithering, "floyd-steinberg");
+  assert.notDeepEqual(Array.from(pattern2.pixels), Array.from(plain.pixels));
   assert.notDeepEqual(Array.from(pattern.pixels), Array.from(plain.pixels));
   assert.notDeepEqual(Array.from(floyd.pixels), Array.from(plain.pixels));
+  assert.notDeepEqual(Array.from(pattern2.pixels), Array.from(pattern.pixels));
+  assertUsesOnlyPaletteColors(pattern2);
   assertUsesOnlyPaletteColors(pattern);
   assertUsesOnlyPaletteColors(floyd);
 });
@@ -105,6 +110,35 @@ test("uses OKLab by default and supports explicit RGB clustering", () => {
   assertUsesOnlyPaletteColors(rgb);
 });
 
+test("diversity weighting gives rare hues more influence", () => {
+  const values = [];
+
+  for (let index = 0; index < 400; index += 1) {
+    values.push([0, 20, 100, 255]);
+    values.push([0, 120, 240, 255]);
+  }
+
+  for (let index = 0; index < 10; index += 1) {
+    values.push([0, 255, 0, 255]);
+  }
+
+  const source = pixels(values);
+  const accurate = quantizeImage(source, values.length, 1, 2, {
+    colorSpace: "oklab",
+    diversity: 0,
+  });
+  const diverse = quantizeImage(source, values.length, 1, 2, {
+    colorSpace: "oklab",
+    diversity: 1,
+  });
+  const strongestAccurateGreen = Math.max(...accurate.palette.map(greenDominance));
+  const strongestDiverseGreen = Math.max(...diverse.palette.map(greenDominance));
+
+  assert.equal(accurate.diversity, 0);
+  assert.equal(diverse.diversity, 1);
+  assert.ok(strongestDiverseGreen > strongestAccurateGreen + 40);
+});
+
 test("rejects unknown dithering modes", () => {
   assert.throws(
     () => quantizeImage(pixels([[0, 0, 0, 255]]), 1, 1, 1, { dithering: "random" }),
@@ -116,6 +150,19 @@ test("rejects unknown color spaces", () => {
   assert.throws(
     () => quantizeImage(pixels([[0, 0, 0, 255]]), 1, 1, 1, { colorSpace: "xyz" }),
     /Unsupported color space/
+  );
+});
+
+test("rejects diversity values outside the zero-to-one range", () => {
+  const source = pixels([[0, 0, 0, 255]]);
+
+  assert.throws(
+    () => quantizeImage(source, 1, 1, 1, { diversity: -0.1 }),
+    /diversity must be between 0 and 1/
+  );
+  assert.throws(
+    () => quantizeImage(source, 1, 1, 1, { diversity: 1.1 }),
+    /diversity must be between 0 and 1/
   );
 });
 
@@ -138,6 +185,10 @@ function assertUsesOnlyPaletteColors(result) {
 
     assert.ok(paletteColors.has(color), `output color ${color} is not in the palette`);
   }
+}
+
+function greenDominance(color) {
+  return color.g - (color.r + color.b) / 2;
 }
 
 function test(name, callback) {
