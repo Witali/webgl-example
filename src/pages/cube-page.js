@@ -12,6 +12,9 @@ const fpsCounter = document.getElementById("fps-counter");
 const materialControls = document.getElementById("material-controls");
 const heightStrengthInput = document.getElementById("height-strength");
 const heightStrengthValue = document.getElementById("height-strength-value");
+const bpalFileInput = document.getElementById("bpal-file");
+const bpalShaderTextureInput = document.getElementById("bpal-shader-texture");
+const bpalStatus = document.getElementById("bpal-status");
 const gl = canvas.getContext("webgl", { antialias: true });
 const fpsState = {
   frameCount: 0,
@@ -30,6 +33,8 @@ const AUTO_ROTATE_Y_SPEED = 0.001;
 const POINTER_ROTATE_SPEED = 0.01;
 const CLICK_DRAG_THRESHOLD = 4;
 let cubeRenderer = null;
+let bpalLoadId = 0;
+let loadedBpalTexture = null;
 
 if (!gl) {
   document.body.textContent = "WebGL is not supported in this browser.";
@@ -47,7 +52,8 @@ async function start() {
   window.__cubeMotionState = cubeMotionState;
   initializeMaterialControls();
   initializeCubePointerControls();
-  cubeRenderer.loadTexture("assets/stone-texture-wic.jpg");
+  await cubeRenderer.loadTexture("assets/stone-texture-wic.jpg");
+  initializeBpalTextureControls();
   requestAnimationFrame(render);
 }
 
@@ -111,6 +117,114 @@ function initializeMaterialControls() {
     updateHeightStrengthLabel();
   });
   applySelectedMaterial();
+}
+
+function initializeBpalTextureControls() {
+  if (!bpalFileInput || !bpalStatus) {
+    return;
+  }
+
+  bpalFileInput.addEventListener("change", () => {
+    const file = bpalFileInput.files && bpalFileInput.files[0];
+
+    if (file) {
+      loadBpalTextureFile(file).catch((error) => {
+        console.error("BPAL texture load failed.", error);
+        setBpalStatus(error && error.message ? error.message : String(error), true);
+      });
+    }
+  });
+
+  if (bpalShaderTextureInput) {
+    bpalShaderTextureInput.addEventListener("change", () => {
+      const enabled = bpalShaderTextureInput.checked && Boolean(loadedBpalTexture);
+
+      cubeRenderer.setBpalShaderTextureEnabled(enabled);
+
+      if (loadedBpalTexture) {
+        loadedBpalTexture.shaderTextureEnabled = enabled;
+        window.__cubeBpalTexture.shaderTextureEnabled = enabled;
+        updateLoadedBpalStatus();
+      }
+    });
+  }
+}
+
+async function loadBpalTextureFile(file) {
+  if (!window.BpalTextureDecoder) {
+    throw new Error("BPAL texture decoder is unavailable");
+  }
+
+  const loadId = ++bpalLoadId;
+
+  bpalFileInput.disabled = true;
+  setBpalStatus(`Чтение ${file.name}…`, false);
+
+  try {
+    const bytes = await file.arrayBuffer();
+
+    if (loadId !== bpalLoadId) {
+      return;
+    }
+
+    const decoded = window.BpalTextureDecoder.decode(bytes);
+    const shaderTextureData = window.BpalTextureDecoder.createShaderTextureData(
+      decoded,
+      gl.getParameter(gl.MAX_TEXTURE_SIZE)
+    );
+
+    cubeRenderer.loadTexturePixels(decoded.pixels, decoded.width, decoded.height, {
+      flipY: true,
+      resetMaterialMaps: true,
+    });
+    cubeRenderer.loadBpalShaderTexture(shaderTextureData);
+
+    if (bpalShaderTextureInput) {
+      bpalShaderTextureInput.disabled = false;
+      cubeRenderer.setBpalShaderTextureEnabled(bpalShaderTextureInput.checked);
+    }
+
+    loadedBpalTexture = {
+      name: file.name,
+      width: decoded.width,
+      height: decoded.height,
+      version: decoded.version,
+      blockSize: decoded.blockSize,
+      localColorCount: decoded.localColorCount,
+      globalColorCount: decoded.globalColorCount,
+      paletteMode: decoded.paletteMode,
+      shaderTextureEnabled: Boolean(bpalShaderTextureInput && bpalShaderTextureInput.checked),
+    };
+    window.__cubeBpalTexture = loadedBpalTexture;
+
+    updateLoadedBpalStatus();
+  } finally {
+    if (loadId === bpalLoadId) {
+      bpalFileInput.disabled = false;
+      bpalFileInput.value = "";
+    }
+  }
+}
+
+function updateLoadedBpalStatus() {
+  if (!loadedBpalTexture) {
+    return;
+  }
+
+  const renderMode = loadedBpalTexture.shaderTextureEnabled
+    ? "двойная индексация в шейдере"
+    : "готовая RGBA-текстура";
+
+  setBpalStatus(
+    `${loadedBpalTexture.name} · ${loadedBpalTexture.width}×${loadedBpalTexture.height} · ` +
+      `BPAL v${loadedBpalTexture.version} · ${renderMode}`,
+    false
+  );
+}
+
+function setBpalStatus(message, isError) {
+  bpalStatus.textContent = message;
+  bpalStatus.classList.toggle("is-error", Boolean(isError));
 }
 
 function initializeCubePointerControls() {

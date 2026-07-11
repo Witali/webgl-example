@@ -34,7 +34,7 @@
   function compressImage(sourcePixels, width, height, settings) {
     const options = settings || {};
     const blockSize = Number(options.blockSize || 8);
-    const localColorCount = Number(options.localColorCount || 4);
+    const localColorCount = Number(options.localColorCount || 8);
     const globalColorCount = Number(options.globalColorCount || 256);
     const paletteColorBits = Number(options.paletteColorBits || 24);
     const paletteMode = options.paletteMode || "explicit";
@@ -106,6 +106,7 @@
     const palette = padPalette(activePalette, globalColorCount);
     const palettePoints = activePalette.map((color) => colorPoint(color.r, color.g, color.b, colorSpace));
     const paletteDistances = createPaletteDistanceMatrix(palettePoints);
+    const paletteNeighborCache = new Map();
     const sourcePointByColor = new Map();
     const globalIndexByColor = new Map();
     let globalAssignments;
@@ -195,7 +196,8 @@
           activePalette.length,
           paletteDistances,
           palettePoints,
-          colorSpace
+          colorSpace,
+          paletteNeighborCache
         );
 
         for (let localIndex = 0; localIndex < localColorCount; localIndex += 1) {
@@ -381,7 +383,8 @@
     activeColorCount,
     paletteDistances,
     palettePoints,
-    colorSpace
+    colorSpace,
+    paletteNeighborCache
   ) {
     const counts = new Uint32Array(activeColorCount);
     const startX = blockX * blockSize;
@@ -412,39 +415,48 @@
     }
 
     candidates.sort((left, right) => counts[right] - counts[left] || left - right);
+    const sourceTargets = collectBlockSourceTargets(
+      globalAssignments,
+      sourcePixels,
+      width,
+      startX,
+      startY,
+      endX,
+      endY,
+      candidates,
+      counts,
+      palettePoints,
+      colorSpace
+    );
 
     const selected = candidates.length <= localColorCount
       ? candidates.slice()
       : selectMinimumErrorColors(
         candidates,
+        sourceTargets,
         counts,
         localColorCount,
-        activeColorCount,
-        paletteDistances
+        palettePoints
       );
-
-    const refined = refineSelectedColors(
+    const replacementCandidates = expandBlockPaletteCandidates(
       selected,
       candidates,
+      sourceTargets,
       counts,
+      localColorCount,
       activeColorCount,
-      paletteDistances
+      paletteDistances,
+      palettePoints,
+      paletteNeighborCache
     );
-    const sourceTargets = refined.length < localColorCount
-      ? collectBlockSourceTargets(
-        globalAssignments,
-        sourcePixels,
-        width,
-        startX,
-        startY,
-        endX,
-        endY,
-        candidates,
-        counts,
-        palettePoints,
-        colorSpace
-      )
-      : [];
+    const refined = refineSelectedColors(
+      selected,
+      replacementCandidates,
+      candidates,
+      sourceTargets,
+      counts,
+      palettePoints
+    );
 
     fillBlockSupportColors(
       refined,
@@ -573,81 +585,272 @@
     }
   }
 
+  function expandBlockPaletteCandidates(
+    selected,
+    sourceColors,
+    sourceTargets,
+    counts,
+    localColorCount,
+    activeColorCount,
+    paletteDistances,
+    palettePoints,
+    paletteNeighborCache
+  ) {
+    const candidates = sourceColors.slice();
+    const included = new Uint8Array(activeColorCount);
+    const neighborCount = Math.min(activeColorCount - 1, Math.max(4, Math.min(8, localColorCount)));
+
+    for (const candidate of candidates) {
+      included[candidate] = 1;
+    }
+
+    for (const selectedColor of selected) {
+      const neighbors = getPaletteNeighbors(
+        selectedColor,
+        neighborCount,
+        activeColorCount,
+        paletteDistances,
+        paletteNeighborCache
+      );
+
+      for (const neighbor of neighbors) {
+        if (!included[neighbor]) {
+          included[neighbor] = 1;
+          candidates.push(neighbor);
+        }
+      }
+    }
+
+    const optimizedCentroids = optimizeBlockCentroids(
+      selected,
+      sourceColors,
+      sourceTargets,
+      counts,
+      palettePoints
+    );
+
+    for (const centroid of optimizedCentroids) {
+      const centroidCandidates = findNearestPalettePoints(
+        centroid,
+        palettePoints,
+        Math.min(localColorCount, activeColorCount)
+      );
+
+      for (const candidate of centroidCandidates) {
+        if (!included[candidate]) {
+          included[candidate] = 1;
+          candidates.push(candidate);
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  function optimizeBlockCentroids(
+    selected,
+    sourceColors,
+    sourceTargets,
+    counts,
+    palettePoints
+  ) {
+    const centroids = selected.map((paletteIndex) => palettePoints[paletteIndex].slice());
+
+    for (let iteration = 0; iteration < 6; iteration += 1) {
+      const sums = centroids.map(() => [0, 0, 0]);
+      const weights = new Float64Array(centroids.length);
+
+      for (let sourcePosition = 0; sourcePosition < sourceTargets.length; sourcePosition += 1) {
+        const centroidIndex = nearestPointIndex(sourceTargets[sourcePosition], centroids);
+        const weight = counts[sourceColors[sourcePosition]];
+
+        sums[centroidIndex][0] += sourceTargets[sourcePosition][0] * weight;
+        sums[centroidIndex][1] += sourceTargets[sourcePosition][1] * weight;
+        sums[centroidIndex][2] += sourceTargets[sourcePosition][2] * weight;
+        weights[centroidIndex] += weight;
+      }
+
+      let movement = 0;
+
+      for (let centroidIndex = 0; centroidIndex < centroids.length; centroidIndex += 1) {
+        if (weights[centroidIndex] === 0) {
+          continue;
+        }
+
+        const next = sums[centroidIndex].map((value) => value / weights[centroidIndex]);
+
+        movement += squaredDistance(centroids[centroidIndex], next);
+        centroids[centroidIndex] = next;
+      }
+
+      if (movement < 1e-8) {
+        break;
+      }
+    }
+
+    return centroids;
+  }
+
+  function findNearestPalettePoints(point, palettePoints, count) {
+    const nearest = [];
+
+    for (let paletteIndex = 0; paletteIndex < palettePoints.length; paletteIndex += 1) {
+      const entry = {
+        index: paletteIndex,
+        distance: squaredDistance(point, palettePoints[paletteIndex]),
+      };
+      let position = nearest.length;
+
+      while (position > 0 && (
+        entry.distance < nearest[position - 1].distance ||
+        (entry.distance === nearest[position - 1].distance && entry.index < nearest[position - 1].index)
+      )) {
+        position -= 1;
+      }
+
+      if (position < count) {
+        nearest.splice(position, 0, entry);
+
+        if (nearest.length > count) {
+          nearest.pop();
+        }
+      }
+    }
+
+    return nearest.map((entry) => entry.index);
+  }
+
+  function getPaletteNeighbors(
+    paletteIndex,
+    neighborCount,
+    activeColorCount,
+    paletteDistances,
+    paletteNeighborCache
+  ) {
+    let neighbors = paletteNeighborCache.get(paletteIndex);
+
+    if (neighbors) {
+      return neighbors;
+    }
+
+    neighbors = [];
+
+    for (let candidate = 0; candidate < activeColorCount; candidate += 1) {
+      if (candidate === paletteIndex) {
+        continue;
+      }
+
+      const entry = {
+        index: candidate,
+        distance: paletteDistances[paletteIndex * activeColorCount + candidate],
+      };
+      let position = neighbors.length;
+
+      while (position > 0 && (
+        entry.distance < neighbors[position - 1].distance ||
+        (entry.distance === neighbors[position - 1].distance && entry.index < neighbors[position - 1].index)
+      )) {
+        position -= 1;
+      }
+
+      if (position < neighborCount) {
+        neighbors.splice(position, 0, entry);
+
+        if (neighbors.length > neighborCount) {
+          neighbors.pop();
+        }
+      }
+    }
+
+    neighbors = neighbors.map((entry) => entry.index);
+    paletteNeighborCache.set(paletteIndex, neighbors);
+
+    return neighbors;
+  }
+
   function refineSelectedColors(
     selected,
-    candidates,
+    replacementCandidates,
+    sourceColors,
+    sourceTargets,
     counts,
-    activeColorCount,
-    paletteDistances
+    palettePoints
   ) {
-    const isSelected = new Uint8Array(activeColorCount);
-    let bestError = calculateSelectionError(
-      selected,
-      candidates,
-      counts,
-      activeColorCount,
-      paletteDistances
-    );
-    let bestSlot = -1;
-    let bestReplacement = -1;
+    const isSelected = new Uint8Array(palettePoints.length);
 
     for (const color of selected) {
       isSelected[color] = 1;
     }
 
-    for (let slot = 0; slot < selected.length; slot += 1) {
-      const nearestWithoutSlot = new Float64Array(candidates.length);
+    for (let pass = 0; pass < 4; pass += 1) {
+      let bestError = calculateSelectionError(
+        selected,
+        sourceColors,
+        sourceTargets,
+        counts,
+        palettePoints
+      );
+      let bestSlot = -1;
+      let bestReplacement = -1;
 
-      nearestWithoutSlot.fill(Infinity);
+      for (let slot = 0; slot < selected.length; slot += 1) {
+        const nearestWithoutSlot = new Float64Array(sourceColors.length);
 
-      for (let sourcePosition = 0; sourcePosition < candidates.length; sourcePosition += 1) {
-        const sourceColor = candidates[sourcePosition];
+        nearestWithoutSlot.fill(Infinity);
 
-        for (let selectedSlot = 0; selectedSlot < selected.length; selectedSlot += 1) {
-          if (selectedSlot === slot) {
+        for (let sourcePosition = 0; sourcePosition < sourceColors.length; sourcePosition += 1) {
+          for (let selectedSlot = 0; selectedSlot < selected.length; selectedSlot += 1) {
+            if (selectedSlot === slot) {
+              continue;
+            }
+
+            nearestWithoutSlot[sourcePosition] = Math.min(
+              nearestWithoutSlot[sourcePosition],
+              squaredDistance(
+                sourceTargets[sourcePosition],
+                palettePoints[selected[selectedSlot]]
+              )
+            );
+          }
+        }
+
+        for (const replacement of replacementCandidates) {
+          if (isSelected[replacement]) {
             continue;
           }
 
-          const distance = paletteDistances[
-            sourceColor * activeColorCount + selected[selectedSlot]
-          ];
+          let error = 0;
 
-          nearestWithoutSlot[sourcePosition] = Math.min(
-            nearestWithoutSlot[sourcePosition],
-            distance
-          );
+          for (let sourcePosition = 0; sourcePosition < sourceColors.length; sourcePosition += 1) {
+            const replacementDistance = squaredDistance(
+              sourceTargets[sourcePosition],
+              palettePoints[replacement]
+            );
+
+            error += counts[sourceColors[sourcePosition]] * Math.min(
+              nearestWithoutSlot[sourcePosition],
+              replacementDistance
+            );
+          }
+
+          if (
+            error < bestError ||
+            (error === bestError && bestReplacement >= 0 && replacement < bestReplacement)
+          ) {
+            bestError = error;
+            bestSlot = slot;
+            bestReplacement = replacement;
+          }
         }
       }
 
-      for (const replacement of candidates) {
-        if (isSelected[replacement]) {
-          continue;
-        }
-
-        let error = 0;
-
-        for (let sourcePosition = 0; sourcePosition < candidates.length; sourcePosition += 1) {
-          const sourceColor = candidates[sourcePosition];
-          const replacementDistance = paletteDistances[
-            sourceColor * activeColorCount + replacement
-          ];
-
-          error += counts[sourceColor] * Math.min(
-            nearestWithoutSlot[sourcePosition],
-            replacementDistance
-          );
-        }
-
-        if (error < bestError) {
-          bestError = error;
-          bestSlot = slot;
-          bestReplacement = replacement;
-        }
+      if (bestSlot < 0) {
+        break;
       }
-    }
 
-    if (bestSlot >= 0) {
+      isSelected[selected[bestSlot]] = 0;
       selected[bestSlot] = bestReplacement;
+      isSelected[bestReplacement] = 1;
     }
 
     return selected;
@@ -655,24 +858,24 @@
 
   function calculateSelectionError(
     selected,
-    candidates,
+    sourceColors,
+    sourceTargets,
     counts,
-    activeColorCount,
-    paletteDistances
+    palettePoints
   ) {
     let error = 0;
 
-    for (const sourceColor of candidates) {
+    for (let sourcePosition = 0; sourcePosition < sourceColors.length; sourcePosition += 1) {
       let nearestDistance = Infinity;
 
       for (const selectedColor of selected) {
         nearestDistance = Math.min(
           nearestDistance,
-          paletteDistances[sourceColor * activeColorCount + selectedColor]
+          squaredDistance(sourceTargets[sourcePosition], palettePoints[selectedColor])
         );
       }
 
-      error += counts[sourceColor] * nearestDistance;
+      error += counts[sourceColors[sourcePosition]] * nearestDistance;
     }
 
     return error;
@@ -680,13 +883,13 @@
 
   function selectMinimumErrorColors(
     candidates,
+    sourceTargets,
     counts,
     localColorCount,
-    activeColorCount,
-    paletteDistances
+    palettePoints
   ) {
     const selected = [];
-    const isSelected = new Uint8Array(activeColorCount);
+    const isSelected = new Uint8Array(palettePoints.length);
     const nearestDistances = new Float64Array(candidates.length);
 
     nearestDistances.fill(Infinity);
@@ -703,10 +906,12 @@
         let error = 0;
 
         for (let sourcePosition = 0; sourcePosition < candidates.length; sourcePosition += 1) {
-          const sourceColor = candidates[sourcePosition];
-          const candidateDistance = paletteDistances[sourceColor * activeColorCount + candidate];
+          const candidateDistance = squaredDistance(
+            sourceTargets[sourcePosition],
+            palettePoints[candidate]
+          );
 
-          error += counts[sourceColor] * Math.min(
+          error += counts[candidates[sourcePosition]] * Math.min(
             nearestDistances[sourcePosition],
             candidateDistance
           );
@@ -729,10 +934,10 @@
       isSelected[bestCandidate] = 1;
 
       for (let sourcePosition = 0; sourcePosition < candidates.length; sourcePosition += 1) {
-        const sourceColor = candidates[sourcePosition];
-        const distance = paletteDistances[sourceColor * activeColorCount + bestCandidate];
-
-        nearestDistances[sourcePosition] = Math.min(nearestDistances[sourcePosition], distance);
+        nearestDistances[sourcePosition] = Math.min(
+          nearestDistances[sourcePosition],
+          squaredDistance(sourceTargets[sourcePosition], palettePoints[bestCandidate])
+        );
       }
     }
 

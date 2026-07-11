@@ -114,8 +114,14 @@ canvas {
   background: rgba(47, 116, 208, 0.88);
 }
 
+.material-option input:disabled + span {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 .material-option input:focus-visible + span,
-#height-strength:focus-visible {
+#height-strength:focus-visible,
+.bpal-upload input:focus-visible + span {
   outline: 2px solid #8fbfff;
   outline-offset: 2px;
 }
@@ -142,13 +148,54 @@ canvas {
   accent-color: #4a91ee;
 }
 
+.bpal-upload {
+  position: relative;
+}
+
+.bpal-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bpal-upload span {
+  display: block;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(28, 33, 40, 0.9);
+  color: #eef2f5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bpal-upload:hover span {
+  border-color: rgba(143, 191, 255, 0.72);
+}
+
+.bpal-status {
+  max-width: 260px;
+  overflow: hidden;
+  color: #aeb8c4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bpal-status.is-error {
+  color: #ff9a9a;
+}
+
 @media (max-width: 520px) {
   .material-controls {
     right: 12px;
   }
 
   .material-controls fieldset,
-  .relief-control {
+  .relief-control,
+  .bpal-upload,
+  .bpal-status {
     width: 100%;
   }
 
@@ -158,5 +205,9 @@ canvas {
 
   #height-strength {
     width: 100%;
+  }
+
+  .bpal-upload span {
+    text-align: center;
   }
 }

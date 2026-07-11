@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BPAL Shader Texture Sampler</title>
+    <link rel="stylesheet" href="./style.css?v=bpal-sampler">
+    <link rel="stylesheet" href="./bpal-sampler.css?v=bpal-sampler">
+  </head>
+  <body>
+    <a class="back-link" href="./index.html">На главную</a>
+    <div id="fps-counter" aria-live="polite">0 FPS</div>
+    <output id="sampler-stats" class="sampler-stats" aria-live="polite">
+      Загрузите BPAL для построения mip-уровней
+    </output>
+
+    <form id="sampler-controls" class="material-controls sampler-controls" aria-label="BPAL sampler controls">
+      <label class="bpal-upload">
+        <input id="bpal-file" type="file" accept=".bpal,application/octet-stream">
+        <span>Загрузить BPAL</span>
+      </label>
+
+      <label class="sampler-control">
+        <span>Фильтрация</span>
+        <select id="filter-mode">
+          <option value="nearest">Nearest + mip</option>
+          <option value="bilinear">Bilinear + mip</option>
+          <option value="trilinear" selected>Trilinear</option>
+          <option value="anisotropic">Anisotropic</option>
+        </select>
+      </label>
+
+      <label class="sampler-control">
+        <span>Анизотропия</span>
+        <select id="anisotropy" disabled>
+          <option value="2">2×</option>
+          <option value="4" selected>4×</option>
+          <option value="8">8×</option>
+        </select>
+      </label>
+
+      <label class="sampler-control lod-control">
+        <span>LOD bias <output id="lod-bias-value" for="lod-bias">0.0</output></span>
+        <input id="lod-bias" type="range" min="-2" max="2" step="0.25" value="0">
+      </label>
+
+      <fieldset>
+        <legend>Материал</legend>
+        <label class="material-option">
+          <input type="radio" name="material" value="matte" checked>
+          <span>Матовый</span>
+        </label>
+        <label class="material-option">
+          <input type="radio" name="material" value="glossy">
+          <span>Глянцевый</span>
+        </label>
+      </fieldset>
+
+      <output id="bpal-status" class="bpal-status" role="status" aria-live="polite">
+        Обычная JPEG-текстура · выберите BPAL-файл
+      </output>
+    </form>
+
+    <canvas id="gl-canvas" aria-label="Куб с программным BPAL-семплером"></canvas>
+
+    <script src="./src/decoders/gpu-jpeg.js"></script>
+    <script src="./src/palette/palette-quantizer.js"></script>
+    <script src="./src/palette/block-palette-codec.js"></script>
+    <script src="./src/palette/block-palette-format.js?v=block-palette-3"></script>
+    <script src="./src/decoders/bpal-texture.js?v=mipmapped-bpal-sampler"></script>
+    <script src="./src/core/textured-cube.js?v=mipmapped-bpal-sampler"></script>
+    <script src="./src/pages/cube-bpal-sampler-page.js?v=mipmapped-bpal-sampler"></script>
+  </body>
+</html>

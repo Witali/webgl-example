@@ -1,0 +1,92 @@
+.sampler-controls {
+  right: 12px;
+}
+
+.sampler-control {
+  display: grid;
+  gap: 5px;
+}
+
+.sampler-control > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #aeb8c4;
+  font-size: 11px;
+}
+
+.sampler-control select {
+  min-width: 132px;
+  padding: 6px 30px 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: #1c2128;
+  color: #eef2f5;
+  font: inherit;
+}
+
+.sampler-control select:disabled {
+  opacity: 0.48;
+}
+
+.sampler-control select:focus-visible,
+#lod-bias:focus-visible {
+  outline: 2px solid #8fbfff;
+  outline-offset: 2px;
+}
+
+.lod-control {
+  min-width: 170px;
+}
+
+#lod-bias {
+  width: 170px;
+  accent-color: #4a91ee;
+}
+
+#lod-bias-value {
+  color: #f5f7fa;
+  font-weight: 650;
+}
+
+.sampler-stats {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  z-index: 1;
+  max-width: min(560px, calc(100vw - 24px));
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(18, 20, 24, 0.72);
+  color: #aeb8c4;
+  font: 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: right;
+  pointer-events: none;
+}
+
+.sampler-controls .bpal-status {
+  max-width: 390px;
+}
+
+@media (max-width: 760px) {
+  body {
+    overflow: auto;
+  }
+
+  .sampler-controls {
+    max-height: 48vh;
+    overflow: auto;
+  }
+
+  .sampler-control,
+  .lod-control,
+  .sampler-controls .bpal-status {
+    width: 100%;
+  }
+
+  .sampler-control select,
+  #lod-bias {
+    width: 100%;
+  }
+}

@@ -3,6 +3,21 @@
 const assert = require("node:assert/strict");
 const { compressImage } = require("../src/palette/block-palette-codec.js");
 
+test("uses quality-oriented explicit-palette defaults", () => {
+  const source = new Uint8ClampedArray(8 * 8 * 4);
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    source[offset + 3] = 255;
+  }
+
+  const result = compressImage(source, 8, 8);
+
+  assert.equal(result.blockSize, 8);
+  assert.equal(result.localColorCount, 8);
+  assert.equal(result.paletteMode, "explicit");
+  assert.equal(result.globalColorCount, 256);
+});
+
 test("keeps exact colors when every block can reference them", () => {
   const source = pixels([
     [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 255, 255],
@@ -256,6 +271,44 @@ test("selects block colors by total error instead of frequency alone", () => {
   assert.ok(Math.sqrt(result.meanSquaredError) < 6);
 });
 
+test("minimizes source-pixel error when selecting colors for a block", () => {
+  const values = [
+    ...Array(18).fill([20, 20, 20, 255]),
+    ...Array(14).fill([90, 90, 90, 255]),
+    ...Array(14).fill([130, 130, 130, 255]),
+    ...Array(10).fill([190, 190, 190, 255]),
+    ...Array(8).fill([250, 250, 250, 255]),
+  ];
+  const source = pixels(values);
+  const result = compressImage(source, 8, 8, {
+    blockSize: 8,
+    localColorCount: 2,
+    globalColorCount: 8,
+    paletteMode: "vector",
+    vectorDeviation: 0.01,
+    colorSpace: "rgb",
+  });
+  const selected = Array.from(result.blockPaletteIndices.slice(0, 2));
+  const selectionError = blockRgbError(values, selected, result.palette);
+  const individuallyNearest = new Set(values.map((value) => nearestRgbPaletteIndex(
+    value,
+    result.palette.slice(0, result.activeGlobalColorCount)
+  )));
+  let optimumError = Infinity;
+
+  for (let first = 0; first < result.activeGlobalColorCount; first += 1) {
+    for (let second = first + 1; second < result.activeGlobalColorCount; second += 1) {
+      optimumError = Math.min(
+        optimumError,
+        blockRgbError(values, [first, second], result.palette)
+      );
+    }
+  }
+
+  assert.equal(selectionError, optimumError);
+  assert.ok(selected.some((paletteIndex) => !individuallyNearest.has(paletteIndex)));
+});
+
 test("supports Bayer and Floyd-Steinberg dithering inside block palettes", () => {
   const values = [];
 
@@ -477,6 +530,47 @@ test("rejects non-power-of-two format settings", () => {
     /Unsupported vector color space/
   );
 });
+
+function blockRgbError(values, paletteIndices, palette) {
+  let error = 0;
+
+  for (const value of values) {
+    let nearest = Infinity;
+
+    for (const paletteIndex of paletteIndices) {
+      const color = palette[paletteIndex];
+      const red = value[0] - color.r;
+      const green = value[1] - color.g;
+      const blue = value[2] - color.b;
+
+      nearest = Math.min(nearest, red * red + green * green + blue * blue);
+    }
+
+    error += nearest;
+  }
+
+  return error;
+}
+
+function nearestRgbPaletteIndex(value, palette) {
+  let bestIndex = 0;
+  let bestError = Infinity;
+
+  for (let index = 0; index < palette.length; index += 1) {
+    const color = palette[index];
+    const red = value[0] - color.r;
+    const green = value[1] - color.g;
+    const blue = value[2] - color.b;
+    const error = red * red + green * green + blue * blue;
+
+    if (error < bestError) {
+      bestIndex = index;
+      bestError = error;
+    }
+  }
+
+  return bestIndex;
+}
 
 function pixels(values) {
   return new Uint8ClampedArray(values.flat());

@@ -13,10 +13,17 @@
   const PROJECT_ROOT_URL = new URL("../../", SCRIPT_URL).href;
   const DEFAULT_SHADER_URLS = {
     vertex: resolveProjectUrl("src/shaders/cube.vert.glsl?v=material-maps"),
-    fragment: resolveProjectUrl("src/shaders/cube.frag.glsl?v=material-maps"),
+    fragment: resolveProjectUrl("src/shaders/cube.frag.glsl?v=bpal-shader-texture"),
   };
   const DEFAULT_TESSELLATION_SEGMENTS = 64;
   const DEFAULT_GEOMETRY_DISPLACEMENT_SCALE = 0.28;
+  const MAX_BPAL_MIP_LEVELS = 16;
+  const BPAL_FILTER_MODES = {
+    nearest: 0,
+    bilinear: 1,
+    trilinear: 2,
+    anisotropic: 3,
+  };
   const FACE_DEFINITIONS = [
     { origin: [-1, -1,  1], uAxis: [ 2, 0,  0], vAxis: [0, 2,  0], normal: [ 0,  0,  1] },
     { origin: [ 1, -1, -1], uAxis: [-2, 0,  0], vAxis: [0, 2,  0], normal: [ 0,  0, -1] },
@@ -81,6 +88,18 @@
       this.texture = createSolidTexture(gl, this.options.placeholderColor || [120, 120, 120, 255], 0);
       this.heightTexture = createSolidTexture(gl, [128, 128, 128, 255], 1);
       this.specularTexture = createSolidTexture(gl, [255, 255, 255, 255], 2);
+      this.bpalTextures = {
+        pixelIndices: createSolidTexture(gl, [0, 0, 0, 255], 3),
+        blockPalettes: createSolidTexture(gl, [0, 0, 0, 255], 4),
+        globalPalette: createSolidTexture(gl, [120, 120, 120, 255], 5),
+      };
+      this.bpalTextureInfo = null;
+      this.bpalShaderTextureEnabled = false;
+      this.bpalSamplerOptions = {
+        filterMode: "trilinear",
+        maxAnisotropy: 4,
+        lodBias: 0,
+      };
       this.heightTexelSize = [1, 1];
 
       gl.useProgram(this.program);
@@ -88,12 +107,17 @@
       gl.uniform1i(this.locations.stoneTexture, 0);
       gl.uniform1i(this.locations.heightTexture, 1);
       gl.uniform1i(this.locations.specularTexture, 2);
+      gl.uniform1i(this.locations.bpalPixelIndices, 3);
+      gl.uniform1i(this.locations.bpalBlockPalettes, 4);
+      gl.uniform1i(this.locations.bpalGlobalPalette, 5);
+      gl.uniform1f(this.locations.useBpalTexture, 0);
       gl.uniform3fv(this.locations.lightPosition, this.options.lightPosition || [3.0, 4.0, 5.0]);
       gl.uniform3fv(this.locations.lightColor, this.options.lightColor || [0.92, 0.9, 0.82]);
       gl.uniform3fv(this.locations.ambientColor, this.options.ambientColor || [0.22, 0.22, 0.22]);
       gl.uniform3fv(this.locations.viewPosition, this.viewPosition);
       gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
       this.setMaterial(this.options.material || "matte");
+      this.applyBpalSamplerUniforms();
     }
 
     async loadTexture(url, options) {
@@ -131,6 +155,197 @@
       await loadImageTexture(this.gl, this.texture, resolveProjectUrl(url), 0, {
         flipY: true,
       });
+    }
+
+    loadTexturePixels(pixels, width, height, options) {
+      const textureOptions = options || {};
+      const texture = this.gl.createTexture();
+
+      if (!texture) {
+        throw new Error("Could not create WebGL texture for RGBA pixels");
+      }
+
+      try {
+        const textureInfo = uploadPixelTexture(
+          this.gl,
+          texture,
+          pixels,
+          width,
+          height,
+          0,
+          { flipY: textureOptions.flipY !== false }
+        );
+
+        if (textureOptions.resetMaterialMaps !== false) {
+          this.resetMaterialMaps();
+        }
+
+        this.replaceTexture(texture);
+
+        return textureInfo;
+      } catch (error) {
+        this.gl.deleteTexture(texture);
+        throw error;
+      }
+    }
+
+    loadBpalShaderTexture(shaderData) {
+      validateBpalShaderTextureData(shaderData);
+
+      const gl = this.gl;
+      const textures = {
+        pixelIndices: gl.createTexture(),
+        blockPalettes: gl.createTexture(),
+        globalPalette: gl.createTexture(),
+      };
+
+      if (!textures.pixelIndices || !textures.blockPalettes || !textures.globalPalette) {
+        deleteTextureSet(gl, textures);
+        throw new Error("Could not create WebGL textures for BPAL indices");
+      }
+
+      try {
+        uploadDataTexture(gl, textures.pixelIndices, shaderData.pixelAtlas, 3);
+        uploadDataTexture(gl, textures.blockPalettes, shaderData.blockPaletteAtlas, 4);
+        uploadDataTexture(gl, textures.globalPalette, shaderData.paletteAtlas, 5);
+      } catch (error) {
+        deleteTextureSet(gl, textures);
+        throw error;
+      }
+
+      deleteTextureSet(gl, this.bpalTextures);
+      this.bpalTextures = textures;
+      this.bpalTextureInfo = shaderData;
+      this.applyBpalTextureUniforms();
+
+      return shaderData;
+    }
+
+    setBpalShaderTextureEnabled(enabled) {
+      if (enabled && !this.bpalTextureInfo) {
+        throw new Error("Load a BPAL texture before enabling shader indexing");
+      }
+
+      this.bpalShaderTextureEnabled = Boolean(enabled);
+      this.applyBpalTextureUniforms();
+    }
+
+    applyBpalTextureUniforms() {
+      const gl = this.gl;
+      const info = this.bpalTextureInfo;
+
+      gl.useProgram(this.program);
+      gl.uniform1f(this.locations.useBpalTexture, this.bpalShaderTextureEnabled && info ? 1 : 0);
+
+      if (!info) {
+        return;
+      }
+
+      gl.uniform2f(this.locations.bpalImageSize, info.width, info.height);
+      gl.uniform1f(this.locations.bpalBlockSize, info.blockSize);
+      gl.uniform1f(this.locations.bpalBlocksX, info.blocksX);
+      gl.uniform1f(this.locations.bpalLocalColorCount, info.localColorCount);
+      gl.uniform2f(
+        this.locations.bpalPixelAtlasSize,
+        info.pixelAtlas.width,
+        info.pixelAtlas.height
+      );
+      gl.uniform2f(
+        this.locations.bpalBlockPaletteAtlasSize,
+        info.blockPaletteAtlas.width,
+        info.blockPaletteAtlas.height
+      );
+      gl.uniform2f(
+        this.locations.bpalPaletteAtlasSize,
+        info.paletteAtlas.width,
+        info.paletteAtlas.height
+      );
+
+      if (Array.isArray(info.levels)) {
+        const fallback = info.levels[info.levels.length - 1];
+
+        gl.uniform1f(this.locations.bpalMipCount, info.mipCount);
+
+        for (let index = 0; index < MAX_BPAL_MIP_LEVELS; index += 1) {
+          const level = info.levels[index] || fallback;
+
+          gl.uniform4f(
+            this.locations.bpalMipInfo[index],
+            level.width,
+            level.height,
+            level.pixelOffset,
+            level.blockPaletteOffset
+          );
+          gl.uniform2f(
+            this.locations.bpalMipBlockInfo[index],
+            level.blocksX,
+            level.blocksY
+          );
+        }
+      }
+
+      this.applyBpalSamplerUniforms();
+    }
+
+    setBpalSamplerOptions(options) {
+      const values = options || {};
+      const filterMode = values.filterMode || this.bpalSamplerOptions.filterMode;
+
+      if (!Object.prototype.hasOwnProperty.call(BPAL_FILTER_MODES, filterMode)) {
+        throw new RangeError(`Unsupported BPAL filter mode: ${filterMode}`);
+      }
+
+      this.bpalSamplerOptions = {
+        filterMode,
+        maxAnisotropy: clamp(Number(
+          values.maxAnisotropy === undefined
+            ? this.bpalSamplerOptions.maxAnisotropy
+            : values.maxAnisotropy
+        ), 1, 8),
+        lodBias: clamp(Number(
+          values.lodBias === undefined ? this.bpalSamplerOptions.lodBias : values.lodBias
+        ), -4, 4),
+      };
+      this.applyBpalSamplerUniforms();
+    }
+
+    applyBpalSamplerUniforms() {
+      const gl = this.gl;
+
+      gl.useProgram(this.program);
+      gl.uniform1f(
+        this.locations.bpalFilterMode,
+        BPAL_FILTER_MODES[this.bpalSamplerOptions.filterMode]
+      );
+      gl.uniform1f(this.locations.bpalMaxAnisotropy, this.bpalSamplerOptions.maxAnisotropy);
+      gl.uniform1f(this.locations.bpalLodBias, this.bpalSamplerOptions.lodBias);
+    }
+
+    resetMaterialMaps() {
+      uploadPixelTexture(
+        this.gl,
+        this.heightTexture,
+        new Uint8Array([128, 128, 128, 255]),
+        1,
+        1,
+        1,
+        { flipY: false }
+      );
+      uploadPixelTexture(
+        this.gl,
+        this.specularTexture,
+        new Uint8Array([255, 255, 255, 255]),
+        1,
+        1,
+        2,
+        { flipY: false }
+      );
+
+      this.heightField = null;
+      this.heightTexelSize = [1, 1];
+      this.replaceGeometry(this.createGeometry(), this.gl.DYNAMIC_DRAW);
+      this.gl.useProgram(this.program);
+      this.gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
     }
 
     async loadMaterialMapsForTexture(textureUrl, options) {
@@ -244,6 +459,12 @@
       gl.bindTexture(gl.TEXTURE_2D, this.heightTexture);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, this.specularTexture);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.bpalTextures.pixelIndices);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, this.bpalTextures.blockPalettes);
+      gl.activeTexture(gl.TEXTURE5);
+      gl.bindTexture(gl.TEXTURE_2D, this.bpalTextures.globalPalette);
       gl.uniformMatrix4fv(this.locations.projection, false, this.projection);
       gl.uniformMatrix4fv(this.locations.model, false, this.model);
       gl.uniformMatrix3fv(this.locations.normalMatrix, false, mat3FromMat4(this.model));
@@ -329,6 +550,29 @@
       stoneTexture: gl.getUniformLocation(program, "uStoneTexture"),
       heightTexture: gl.getUniformLocation(program, "uHeightTexture"),
       specularTexture: gl.getUniformLocation(program, "uSpecularTexture"),
+      bpalPixelIndices: gl.getUniformLocation(program, "uBpalPixelIndices"),
+      bpalBlockPalettes: gl.getUniformLocation(program, "uBpalBlockPalettes"),
+      bpalGlobalPalette: gl.getUniformLocation(program, "uBpalGlobalPalette"),
+      useBpalTexture: gl.getUniformLocation(program, "uUseBpalTexture"),
+      bpalImageSize: gl.getUniformLocation(program, "uBpalImageSize"),
+      bpalBlockSize: gl.getUniformLocation(program, "uBpalBlockSize"),
+      bpalBlocksX: gl.getUniformLocation(program, "uBpalBlocksX"),
+      bpalLocalColorCount: gl.getUniformLocation(program, "uBpalLocalColorCount"),
+      bpalPixelAtlasSize: gl.getUniformLocation(program, "uBpalPixelAtlasSize"),
+      bpalBlockPaletteAtlasSize: gl.getUniformLocation(program, "uBpalBlockPaletteAtlasSize"),
+      bpalPaletteAtlasSize: gl.getUniformLocation(program, "uBpalPaletteAtlasSize"),
+      bpalMipCount: gl.getUniformLocation(program, "uBpalMipCount"),
+      bpalMipInfo: Array.from(
+        { length: MAX_BPAL_MIP_LEVELS },
+        (_, index) => gl.getUniformLocation(program, `uBpalMipInfo${index}`)
+      ),
+      bpalMipBlockInfo: Array.from(
+        { length: MAX_BPAL_MIP_LEVELS },
+        (_, index) => gl.getUniformLocation(program, `uBpalMipBlockInfo${index}`)
+      ),
+      bpalFilterMode: gl.getUniformLocation(program, "uBpalFilterMode"),
+      bpalMaxAnisotropy: gl.getUniformLocation(program, "uBpalMaxAnisotropy"),
+      bpalLodBias: gl.getUniformLocation(program, "uBpalLodBias"),
       heightTexelSize: gl.getUniformLocation(program, "uHeightTexelSize"),
       heightStrength: gl.getUniformLocation(program, "uHeightStrength"),
       lightPosition: gl.getUniformLocation(program, "uLightPosition"),
@@ -501,6 +745,97 @@
       width: image.naturalWidth || image.width,
       height: image.naturalHeight || image.height,
     };
+  }
+
+  function uploadPixelTexture(gl, texture, pixels, width, height, unit, options) {
+    const uploadOptions = options || {};
+
+    if (!(pixels instanceof Uint8Array) && !(pixels instanceof Uint8ClampedArray)) {
+      throw new TypeError("Texture pixels must be Uint8Array or Uint8ClampedArray");
+    }
+
+    if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1) {
+      throw new RangeError("Texture dimensions must be positive integers");
+    }
+
+    if (pixels.length !== width * height * 4) {
+      throw new RangeError("Texture RGBA buffer length does not match its dimensions");
+    }
+
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, Boolean(uploadOptions.flipY));
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixels
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+    return { width, height };
+  }
+
+  function uploadDataTexture(gl, texture, atlas, unit) {
+    const format = atlas.channels === 1 ? gl.LUMINANCE : gl.RGBA;
+
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      format,
+      atlas.width,
+      atlas.height,
+      0,
+      format,
+      gl.UNSIGNED_BYTE,
+      atlas.data
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  }
+
+  function validateBpalShaderTextureData(data) {
+    const atlases = data && [data.pixelAtlas, data.blockPaletteAtlas, data.paletteAtlas];
+
+    if (
+      !data ||
+      !Number.isInteger(data.width) ||
+      !Number.isInteger(data.height) ||
+      !Number.isInteger(data.blockSize) ||
+      !Number.isInteger(data.blocksX) ||
+      !Number.isInteger(data.localColorCount) ||
+      !atlases ||
+      atlases.some((atlas) => !atlas || !(atlas.data instanceof Uint8Array))
+    ) {
+      throw new TypeError("BPAL shader texture data is invalid");
+    }
+  }
+
+  function deleteTextureSet(gl, textures) {
+    if (!textures) {
+      return;
+    }
+
+    Object.values(textures).forEach((texture) => {
+      if (texture) {
+        gl.deleteTexture(texture);
+      }
+    });
   }
 
   async function loadOptionalHeightMap(gl, texture, url, unit) {
