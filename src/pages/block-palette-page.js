@@ -196,8 +196,8 @@ function processImage() {
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
   const workerUrl = settings.algorithm === "webgl"
-    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-2"
-    : "./src/palette/block-palette-worker.js?v=block-palette-8";
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-3"
+    : "./src/palette/block-palette-worker.js?v=block-palette-9";
   const worker = new Worker(workerUrl);
 
   state.worker = worker;
@@ -575,7 +575,7 @@ function optimizeSettings() {
   setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
 
   const preview = createOptimizationPreview();
-  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-1");
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-2");
 
   state.optimizerWorker = worker;
 

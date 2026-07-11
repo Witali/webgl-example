@@ -311,6 +311,37 @@ test("does not diffuse Floyd-Steinberg error across block palette boundaries", (
   assert.deepEqual(rightBlockIndices(resultA), rightBlockIndices(resultB));
 });
 
+test("fills unused Floyd-Steinberg block slots from source-derived support colors", () => {
+  const values = [];
+  const ramp = [0, 36, 72, 108, 144, 180, 216, 255];
+
+  for (let y = 0; y < 4; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      const value = x < 12 ? ramp[(x + y * 3) % ramp.length] : 119;
+
+      values.push([value, value, value, 255]);
+    }
+  }
+
+  const result = compressImage(pixels(values), 16, 4, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 8,
+    colorSpace: "rgb",
+    dithering: "floyd-steinberg",
+  });
+  const flatBlockPalette = result.blockPaletteIndices.slice(12, 16);
+  const closestToSource = result.palette
+    .slice(0, result.activeGlobalColorCount)
+    .map((color, index) => ({ index, distance: Math.abs(color.r - 119) }))
+    .sort((left, right) => left.distance - right.distance || left.index - right.index)
+    .slice(0, 4)
+    .map((entry) => entry.index);
+
+  assert.equal(new Set(flatBlockPalette).size, 4);
+  assert.deepEqual(new Set(flatBlockPalette), new Set(closestToSource));
+});
+
 test("diversity weighting gives rare colors more influence in the common palette", () => {
   const values = [];
 

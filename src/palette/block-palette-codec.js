@@ -180,7 +180,10 @@
           blockSize,
           localColorCount,
           activePalette.length,
-          paletteDistances
+          paletteDistances,
+          palettePoints,
+          colorSpace,
+          dithering
         );
 
         for (let localIndex = 0; localIndex < localColorCount; localIndex += 1) {
@@ -363,20 +366,40 @@
     blockSize,
     localColorCount,
     activeColorCount,
-    paletteDistances
+    paletteDistances,
+    palettePoints,
+    colorSpace,
+    dithering
   ) {
     const counts = new Uint32Array(activeColorCount);
     const startX = blockX * blockSize;
     const startY = blockY * blockSize;
     const endX = Math.min(width, startX + blockSize);
     const endY = Math.min(height, startY + blockSize);
+    const sourcePointSum = [0, 0, 0];
+    let sourcePointCount = 0;
 
     for (let y = startY; y < endY; y += 1) {
       for (let x = startX; x < endX; x += 1) {
         const pixel = y * width + x;
+        const offset = pixel * 4;
 
-        if (sourcePixels[pixel * 4 + 3] !== 0) {
+        if (sourcePixels[offset + 3] !== 0) {
           counts[globalAssignments[pixel]] += 1;
+
+          if (dithering === "floyd-steinberg") {
+            const point = colorPoint(
+              sourcePixels[offset],
+              sourcePixels[offset + 1],
+              sourcePixels[offset + 2],
+              colorSpace
+            );
+
+            sourcePointSum[0] += point[0];
+            sourcePointSum[1] += point[1];
+            sourcePointSum[2] += point[2];
+            sourcePointCount += 1;
+          }
         }
       }
     }
@@ -405,17 +428,72 @@
         paletteDistances
       );
 
-    while (selected.length < localColorCount) {
-      selected.push(selected[0] || 0);
-    }
-
-    return refineSelectedColors(
+    const refined = refineSelectedColors(
       selected,
       candidates,
       counts,
       activeColorCount,
       paletteDistances
     );
+
+    if (dithering === "floyd-steinberg") {
+      const sourceMean = sourcePointCount === 0
+        ? palettePoints[refined[0]]
+        : sourcePointSum.map((value) => value / sourcePointCount);
+
+      fillFloydSupportColors(
+        refined,
+        sourceMean,
+        localColorCount,
+        activeColorCount,
+        palettePoints
+      );
+    }
+
+    while (refined.length < localColorCount) {
+      refined.push(refined[0] || 0);
+    }
+
+    return refined;
+  }
+
+  function fillFloydSupportColors(
+    selected,
+    sourceMean,
+    localColorCount,
+    activeColorCount,
+    palettePoints
+  ) {
+    const isSelected = new Uint8Array(activeColorCount);
+
+    for (const color of selected) {
+      isSelected[color] = 1;
+    }
+
+    const alternatives = [];
+
+    for (let candidate = 0; candidate < activeColorCount; candidate += 1) {
+      if (isSelected[candidate]) {
+        continue;
+      }
+
+      alternatives.push({
+        candidate,
+        error: squaredDistance(sourceMean, palettePoints[candidate]),
+      });
+    }
+
+    alternatives.sort((left, right) => (
+      left.error - right.error || left.candidate - right.candidate
+    ));
+
+    for (const alternative of alternatives) {
+      if (selected.length >= localColorCount) {
+        break;
+      }
+
+      selected.push(alternative.candidate);
+    }
   }
 
   function refineSelectedColors(
