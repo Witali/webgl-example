@@ -343,7 +343,7 @@ test("does not diffuse Floyd-Steinberg error across block palette boundaries", (
   assert.deepEqual(rightBlockIndices(resultA), rightBlockIndices(resultB));
 });
 
-test("fills unused Floyd-Steinberg block slots from source-derived support colors", () => {
+test("fills every block palette slot with distinct source-adjacent colors", () => {
   const values = [];
   const ramp = [0, 36, 72, 108, 144, 180, 216, 255];
 
@@ -355,23 +355,25 @@ test("fills unused Floyd-Steinberg block slots from source-derived support color
     }
   }
 
-  const result = compressImage(pixels(values), 16, 4, {
-    blockSize: 4,
-    localColorCount: 4,
-    globalColorCount: 8,
-    colorSpace: "rgb",
-    dithering: "floyd-steinberg",
-  });
-  const flatBlockPalette = result.blockPaletteIndices.slice(12, 16);
-  const closestToSource = result.palette
-    .slice(0, result.activeGlobalColorCount)
-    .map((color, index) => ({ index, distance: Math.abs(color.r - 119) }))
-    .sort((left, right) => left.distance - right.distance || left.index - right.index)
-    .slice(0, 4)
-    .map((entry) => entry.index);
+  for (const dithering of ["none", "pattern", "floyd-steinberg"]) {
+    const result = compressImage(pixels(values), 16, 4, {
+      blockSize: 4,
+      localColorCount: 4,
+      globalColorCount: 8,
+      colorSpace: "rgb",
+      dithering,
+    });
+    const flatBlockPalette = result.blockPaletteIndices.slice(12, 16);
+    const closestToSource = result.palette
+      .slice(0, result.activeGlobalColorCount)
+      .map((color, index) => ({ index, distance: Math.abs(color.r - 119) }))
+      .sort((left, right) => left.distance - right.distance || left.index - right.index)
+      .slice(0, 4)
+      .map((entry) => entry.index);
 
-  assert.equal(new Set(flatBlockPalette).size, 4);
-  assert.deepEqual(new Set(flatBlockPalette), new Set(closestToSource));
+    assert.equal(new Set(flatBlockPalette).size, 4, dithering);
+    assert.deepEqual(new Set(flatBlockPalette), new Set(closestToSource), dithering);
+  }
 });
 
 test("diversity weighting gives rare colors more influence in the common palette", () => {

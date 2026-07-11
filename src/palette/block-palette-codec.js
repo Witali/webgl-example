@@ -195,8 +195,7 @@
           activePalette.length,
           paletteDistances,
           palettePoints,
-          colorSpace,
-          dithering
+          colorSpace
         );
 
         for (let localIndex = 0; localIndex < localColorCount; localIndex += 1) {
@@ -382,17 +381,13 @@
     activeColorCount,
     paletteDistances,
     palettePoints,
-    colorSpace,
-    dithering
+    colorSpace
   ) {
     const counts = new Uint32Array(activeColorCount);
     const startX = blockX * blockSize;
     const startY = blockY * blockSize;
     const endX = Math.min(width, startX + blockSize);
     const endY = Math.min(height, startY + blockSize);
-    const sourcePointSum = [0, 0, 0];
-    let sourcePointCount = 0;
-
     for (let y = startY; y < endY; y += 1) {
       for (let x = startX; x < endX; x += 1) {
         const pixel = y * width + x;
@@ -400,20 +395,6 @@
 
         if (sourcePixels[offset + 3] !== 0) {
           counts[globalAssignments[pixel]] += 1;
-
-          if (dithering === "floyd-steinberg") {
-            const point = colorPoint(
-              sourcePixels[offset],
-              sourcePixels[offset + 1],
-              sourcePixels[offset + 2],
-              colorSpace
-            );
-
-            sourcePointSum[0] += point[0];
-            sourcePointSum[1] += point[1];
-            sourcePointSum[2] += point[2];
-            sourcePointCount += 1;
-          }
         }
       }
     }
@@ -449,20 +430,31 @@
       activeColorCount,
       paletteDistances
     );
+    const sourceTargets = refined.length < localColorCount
+      ? collectBlockSourceTargets(
+        globalAssignments,
+        sourcePixels,
+        width,
+        startX,
+        startY,
+        endX,
+        endY,
+        candidates,
+        counts,
+        palettePoints,
+        colorSpace
+      )
+      : [];
 
-    if (dithering === "floyd-steinberg") {
-      const sourceMean = sourcePointCount === 0
-        ? palettePoints[refined[0]]
-        : sourcePointSum.map((value) => value / sourcePointCount);
-
-      fillFloydSupportColors(
-        refined,
-        sourceMean,
-        localColorCount,
-        activeColorCount,
-        palettePoints
-      );
-    }
+    fillBlockSupportColors(
+      refined,
+      candidates,
+      sourceTargets,
+      counts,
+      localColorCount,
+      activeColorCount,
+      palettePoints
+    );
 
     while (refined.length < localColorCount) {
       refined.push(refined[0] || 0);
@@ -471,42 +463,113 @@
     return refined;
   }
 
-  function fillFloydSupportColors(
+  function collectBlockSourceTargets(
+    globalAssignments,
+    sourcePixels,
+    width,
+    startX,
+    startY,
+    endX,
+    endY,
+    sourceColors,
+    counts,
+    palettePoints,
+    colorSpace
+  ) {
+    const sums = sourceColors.map(() => [0, 0, 0]);
+
+    for (let y = startY; y < endY; y += 1) {
+      for (let x = startX; x < endX; x += 1) {
+        const pixel = y * width + x;
+        const offset = pixel * 4;
+
+        if (sourcePixels[offset + 3] === 0) {
+          continue;
+        }
+
+        const sourcePosition = sourceColors.indexOf(globalAssignments[pixel]);
+        const point = colorPoint(
+          sourcePixels[offset],
+          sourcePixels[offset + 1],
+          sourcePixels[offset + 2],
+          colorSpace
+        );
+
+        sums[sourcePosition][0] += point[0];
+        sums[sourcePosition][1] += point[1];
+        sums[sourcePosition][2] += point[2];
+      }
+    }
+
+    return sums.map((sum, sourcePosition) => {
+      const count = counts[sourceColors[sourcePosition]];
+
+      return count > 0
+        ? sum.map((value) => value / count)
+        : palettePoints[sourceColors[sourcePosition]];
+    });
+  }
+
+  function fillBlockSupportColors(
     selected,
-    sourceMean,
+    sourceColors,
+    sourceTargets,
+    counts,
     localColorCount,
     activeColorCount,
     palettePoints
   ) {
     const isSelected = new Uint8Array(activeColorCount);
+    const supportCounts = new Uint16Array(sourceColors.length);
 
     for (const color of selected) {
       isSelected[color] = 1;
+
+      const sourcePosition = sourceColors.indexOf(color);
+
+      if (sourcePosition >= 0) {
+        supportCounts[sourcePosition] += 1;
+      }
     }
 
-    const alternatives = [];
+    while (selected.length < localColorCount && selected.length < activeColorCount) {
+      let bestSourcePosition = 0;
+      let bestPriority = -1;
 
-    for (let candidate = 0; candidate < activeColorCount; candidate += 1) {
-      if (isSelected[candidate]) {
-        continue;
+      for (let sourcePosition = 0; sourcePosition < sourceColors.length; sourcePosition += 1) {
+        const sourceColor = sourceColors[sourcePosition];
+        const priority = Math.max(1, counts[sourceColor]) / (supportCounts[sourcePosition] + 1);
+
+        if (priority > bestPriority) {
+          bestPriority = priority;
+          bestSourcePosition = sourcePosition;
+        }
       }
 
-      alternatives.push({
-        candidate,
-        error: squaredDistance(sourceMean, palettePoints[candidate]),
-      });
-    }
+      const sourceTarget = sourceTargets[bestSourcePosition];
+      let bestCandidate = -1;
+      let bestDistance = Infinity;
 
-    alternatives.sort((left, right) => (
-      left.error - right.error || left.candidate - right.candidate
-    ));
+      for (let candidate = 0; candidate < activeColorCount; candidate += 1) {
+        if (isSelected[candidate]) {
+          continue;
+        }
 
-    for (const alternative of alternatives) {
-      if (selected.length >= localColorCount) {
+        const distance = squaredDistance(sourceTarget, palettePoints[candidate]);
+
+        if (distance < bestDistance) {
+          bestCandidate = candidate;
+          bestDistance = distance;
+        }
+      }
+
+      if (bestCandidate < 0) {
         break;
       }
 
-      selected.push(alternative.candidate);
+      selected.push(bestCandidate);
+      isSelected[bestCandidate] = 1;
+      supportCounts[bestSourcePosition] += 1;
     }
   }
 
