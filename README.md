@@ -25,7 +25,8 @@ Open `index.html` through a local server to choose between:
   image uploads, and PNG export
 - `block-palette.html` for block-based indexed color compression with one
   shared RGB565 or RGB888 image palette, selectable block sizes, and per-block
-  local palettes
+  local palettes; the implementation and BPAL workflow are documented in
+  [`BLOCK_PALETTE_README.md`](./BLOCK_PALETTE_README.md)
 - `retro.html` for ZX Spectrum 256x192 `.scr` export and PC VGA Mode X
   320x240 four-plane image data with a separate 6-bit DAC palette; source
   images can be rotated by 90, 180, or 270 degrees before fitting
