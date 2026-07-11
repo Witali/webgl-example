@@ -11,7 +11,7 @@ const {
   getBlockPaletteFileLayout,
 } = require("../src/palette/block-palette-format.js");
 
-test("round-trips an RGB888 block-palette image through BPAL v1", () => {
+test("round-trips an explicit RGB888 block-palette image through BPAL v2", () => {
   const values = [];
 
   for (let y = 0; y < 3; y += 1) {
@@ -39,6 +39,7 @@ test("round-trips an RGB888 block-palette image through BPAL v1", () => {
   assert.equal(decoded.localColorCount, result.localColorCount);
   assert.equal(decoded.globalColorCount, result.globalColorCount);
   assert.equal(decoded.paletteColorBits, result.paletteColorBits);
+  assert.equal(decoded.paletteMode, "explicit");
   assert.deepEqual(Array.from(decoded.blockPaletteIndices), Array.from(result.blockPaletteIndices));
   assert.deepEqual(Array.from(decoded.pixelIndices), Array.from(result.pixelIndices));
   assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
@@ -67,8 +68,58 @@ test("packs adjacent BPAL payload sections without byte alignment", () => {
   assert.equal(layout.payloadBits, 72);
   assert.equal(layout.payloadBytes, 9);
   assert.equal(layout.headerBytes, HEADER_BYTES);
-  assert.equal(layout.totalBytes, 21);
+  assert.equal(layout.totalBytes, 23);
   assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+});
+
+test("stores vector endpoints and reconstructs the preview palette", () => {
+  const values = [];
+
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      values.push([x * 36, y * 36, (x * y % 8) * 36, 255]);
+    }
+  }
+
+  const result = compressImage(pixels(values), 8, 8, {
+    blockSize: 4,
+    localColorCount: 4,
+    globalColorCount: 32,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorDeviation: 0.05,
+    colorSpace: "rgb",
+  });
+  const layout = getBlockPaletteFileLayout(result);
+  const encoded = encodeBlockPaletteFile(result);
+  const decoded = decodeBlockPaletteFile(encoded);
+
+  assert.equal(decoded.paletteMode, "vector");
+  assert.equal(decoded.paletteVectorCount, result.paletteVectorCount);
+  assert.equal(decoded.paletteVectors.length, result.paletteVectorCount);
+  assert.equal(layout.globalPaletteBits, result.paletteVectorCount * 2 * 24);
+  assert.deepEqual(decoded.paletteVectors, result.paletteVectors.map((vector) => ({
+    start: colorWithoutCodecFields(vector.start),
+    end: colorWithoutCodecFields(vector.end),
+  })));
+  assert.deepEqual(
+    decoded.palette.map((color) => color.hex),
+    result.palette.map((color) => color.hex)
+  );
+  assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+});
+
+test("continues to decode legacy BPAL v1 files", () => {
+  const decoded = decodeBlockPaletteFile(createVersion1Fixture());
+
+  assert.equal(decoded.version, 1);
+  assert.equal(decoded.paletteMode, "explicit");
+  assert.equal(decoded.width, 2);
+  assert.equal(decoded.height, 2);
+  assert.deepEqual(Array.from(decoded.pixels), [
+    255, 0, 0, 255, 0, 0, 255, 255,
+    0, 0, 255, 255, 255, 0, 0, 255,
+  ]);
 });
 
 test("stores and restores 10-bit common-palette indices", () => {
@@ -113,15 +164,51 @@ test("rejects invalid BPAL magic, versions, and lengths", () => {
   const invalidVersion = encoded.slice();
 
   invalidMagic[0] = 0;
-  invalidVersion[4] = (invalidVersion[4] & 0x0f) | 0x20;
+  invalidVersion[4] = (invalidVersion[4] & 0x0f) | 0x30;
 
   assert.throws(() => decodeBlockPaletteFile(invalidMagic), /Invalid BPAL magic/);
-  assert.throws(() => decodeBlockPaletteFile(invalidVersion), /Unsupported BPAL version: 2/);
+  assert.throws(() => decodeBlockPaletteFile(invalidVersion), /Unsupported BPAL version: 3/);
   assert.throws(() => decodeBlockPaletteFile(encoded.slice(0, -1)), /file size does not match/);
 });
 
 function pixels(values) {
   return new Uint8ClampedArray(values.flat());
+}
+
+function colorWithoutCodecFields(color) {
+  return { r: color.r, g: color.g, b: color.b, hex: color.hex };
+}
+
+function createVersion1Fixture() {
+  const bits = [];
+  const write = (value, count) => {
+    for (let bit = count - 1; bit >= 0; bit -= 1) {
+      bits.push(Math.floor(value / 2 ** bit) % 2);
+    }
+  };
+
+  write(1, 4); // version
+  write(1, 24); // width - 1
+  write(1, 24); // height - 1
+  write(0, 3); // log2(block size) - 1
+  write(0, 2); // log2(local colors) - 1
+  write(0, 4); // log2(global colors) - 1
+  write(1, 1); // RGB888
+  write(0, 2); // reserved
+  write(255, 8); write(0, 8); write(0, 8);
+  write(0, 8); write(0, 8); write(255, 8);
+  write(0, 1); write(1, 1); // block palette
+  write(0, 1); write(1, 1); write(1, 1); write(0, 1); // pixels
+
+  const bytes = new Uint8Array(4 + Math.ceil(bits.length / 8));
+
+  bytes.set([0x42, 0x50, 0x41, 0x4c]);
+
+  for (let index = 0; index < bits.length; index += 1) {
+    bytes[4 + Math.floor(index / 8)] |= bits[index] << (7 - index % 8);
+  }
+
+  return bytes;
 }
 
 function test(name, callback) {
