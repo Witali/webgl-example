@@ -18,7 +18,8 @@ in `src/decoders/webp-decoder.js`.
 Open `index.html` through a local server to choose between:
 
 - `cube.html` for the textured rotating cube, including local BPAL texture
-  upload and decoding into a regular WebGL RGBA texture
+  upload and a switch between a regular decoded RGBA texture and BPAL double
+  indexing in the fragment shader
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
 - `palette.html` for weighted OKLab or RGB k-means palette reduction with a

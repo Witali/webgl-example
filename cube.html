@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>WebGL Rotating Cube</title>
-    <link rel="stylesheet" href="./style.css?v=cube-bpal-texture">
+    <link rel="stylesheet" href="./style.css?v=cube-bpal-shader-texture">
   </head>
   <body>
     <a class="back-link" href="./index.html">Home</a>
@@ -29,13 +29,17 @@
         <input id="bpal-file" type="file" accept=".bpal,application/octet-stream">
         <span>Загрузить BPAL</span>
       </label>
+      <label class="material-option" title="Выполнять двойную индексацию BPAL во фрагментном шейдере">
+        <input id="bpal-shader-texture" type="checkbox" disabled>
+        <span>BPAL через шейдер</span>
+      </label>
       <output id="bpal-status" class="bpal-status" role="status" aria-live="polite">JPEG по умолчанию</output>
     </form>
     <canvas id="gl-canvas" aria-label="Rotating WebGL cube"></canvas>
     <script src="./src/decoders/gpu-jpeg.js"></script>
     <script src="./src/palette/block-palette-format.js?v=block-palette-3"></script>
-    <script src="./src/decoders/bpal-texture.js?v=bpal-texture-1"></script>
-    <script src="./src/core/textured-cube.js?v=bpal-pixel-texture"></script>
-    <script src="./src/pages/cube-page.js?v=cube-bpal-texture"></script>
+    <script src="./src/decoders/bpal-texture.js?v=bpal-shader-texture"></script>
+    <script src="./src/core/textured-cube.js?v=bpal-shader-texture"></script>
+    <script src="./src/pages/cube-page.js?v=bpal-shader-texture"></script>
   </body>
 </html>

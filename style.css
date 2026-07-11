@@ -114,6 +114,11 @@ canvas {
   background: rgba(47, 116, 208, 0.88);
 }
 
+.material-option input:disabled + span {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 .material-option input:focus-visible + span,
 #height-strength:focus-visible,
 .bpal-upload input:focus-visible + span {

@@ -13,6 +13,7 @@ const materialControls = document.getElementById("material-controls");
 const heightStrengthInput = document.getElementById("height-strength");
 const heightStrengthValue = document.getElementById("height-strength-value");
 const bpalFileInput = document.getElementById("bpal-file");
+const bpalShaderTextureInput = document.getElementById("bpal-shader-texture");
 const bpalStatus = document.getElementById("bpal-status");
 const gl = canvas.getContext("webgl", { antialias: true });
 const fpsState = {
@@ -33,6 +34,7 @@ const POINTER_ROTATE_SPEED = 0.01;
 const CLICK_DRAG_THRESHOLD = 4;
 let cubeRenderer = null;
 let bpalLoadId = 0;
+let loadedBpalTexture = null;
 
 if (!gl) {
   document.body.textContent = "WebGL is not supported in this browser.";
@@ -132,6 +134,20 @@ function initializeBpalTextureControls() {
       });
     }
   });
+
+  if (bpalShaderTextureInput) {
+    bpalShaderTextureInput.addEventListener("change", () => {
+      const enabled = bpalShaderTextureInput.checked && Boolean(loadedBpalTexture);
+
+      cubeRenderer.setBpalShaderTextureEnabled(enabled);
+
+      if (loadedBpalTexture) {
+        loadedBpalTexture.shaderTextureEnabled = enabled;
+        window.__cubeBpalTexture.shaderTextureEnabled = enabled;
+        updateLoadedBpalStatus();
+      }
+    });
+  }
 }
 
 async function loadBpalTextureFile(file) {
@@ -152,13 +168,23 @@ async function loadBpalTextureFile(file) {
     }
 
     const decoded = window.BpalTextureDecoder.decode(bytes);
+    const shaderTextureData = window.BpalTextureDecoder.createShaderTextureData(
+      decoded,
+      gl.getParameter(gl.MAX_TEXTURE_SIZE)
+    );
 
     cubeRenderer.loadTexturePixels(decoded.pixels, decoded.width, decoded.height, {
       flipY: true,
       resetMaterialMaps: true,
     });
+    cubeRenderer.loadBpalShaderTexture(shaderTextureData);
 
-    window.__cubeBpalTexture = {
+    if (bpalShaderTextureInput) {
+      bpalShaderTextureInput.disabled = false;
+      cubeRenderer.setBpalShaderTextureEnabled(bpalShaderTextureInput.checked);
+    }
+
+    loadedBpalTexture = {
       name: file.name,
       width: decoded.width,
       height: decoded.height,
@@ -167,18 +193,33 @@ async function loadBpalTextureFile(file) {
       localColorCount: decoded.localColorCount,
       globalColorCount: decoded.globalColorCount,
       paletteMode: decoded.paletteMode,
+      shaderTextureEnabled: Boolean(bpalShaderTextureInput && bpalShaderTextureInput.checked),
     };
+    window.__cubeBpalTexture = loadedBpalTexture;
 
-    setBpalStatus(
-      `${file.name} · ${decoded.width}×${decoded.height} · BPAL v${decoded.version}`,
-      false
-    );
+    updateLoadedBpalStatus();
   } finally {
     if (loadId === bpalLoadId) {
       bpalFileInput.disabled = false;
       bpalFileInput.value = "";
     }
   }
+}
+
+function updateLoadedBpalStatus() {
+  if (!loadedBpalTexture) {
+    return;
+  }
+
+  const renderMode = loadedBpalTexture.shaderTextureEnabled
+    ? "двойная индексация в шейдере"
+    : "готовая RGBA-текстура";
+
+  setBpalStatus(
+    `${loadedBpalTexture.name} · ${loadedBpalTexture.width}×${loadedBpalTexture.height} · ` +
+      `BPAL v${loadedBpalTexture.version} · ${renderMode}`,
+    false
+  );
 }
 
 function setBpalStatus(message, isError) {

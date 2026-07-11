@@ -13,7 +13,7 @@
   const PROJECT_ROOT_URL = new URL("../../", SCRIPT_URL).href;
   const DEFAULT_SHADER_URLS = {
     vertex: resolveProjectUrl("src/shaders/cube.vert.glsl?v=material-maps"),
-    fragment: resolveProjectUrl("src/shaders/cube.frag.glsl?v=material-maps"),
+    fragment: resolveProjectUrl("src/shaders/cube.frag.glsl?v=bpal-shader-texture"),
   };
   const DEFAULT_TESSELLATION_SEGMENTS = 64;
   const DEFAULT_GEOMETRY_DISPLACEMENT_SCALE = 0.28;
@@ -81,6 +81,13 @@
       this.texture = createSolidTexture(gl, this.options.placeholderColor || [120, 120, 120, 255], 0);
       this.heightTexture = createSolidTexture(gl, [128, 128, 128, 255], 1);
       this.specularTexture = createSolidTexture(gl, [255, 255, 255, 255], 2);
+      this.bpalTextures = {
+        pixelIndices: createSolidTexture(gl, [0, 0, 0, 255], 3),
+        blockPalettes: createSolidTexture(gl, [0, 0, 0, 255], 4),
+        globalPalette: createSolidTexture(gl, [120, 120, 120, 255], 5),
+      };
+      this.bpalTextureInfo = null;
+      this.bpalShaderTextureEnabled = false;
       this.heightTexelSize = [1, 1];
 
       gl.useProgram(this.program);
@@ -88,6 +95,10 @@
       gl.uniform1i(this.locations.stoneTexture, 0);
       gl.uniform1i(this.locations.heightTexture, 1);
       gl.uniform1i(this.locations.specularTexture, 2);
+      gl.uniform1i(this.locations.bpalPixelIndices, 3);
+      gl.uniform1i(this.locations.bpalBlockPalettes, 4);
+      gl.uniform1i(this.locations.bpalGlobalPalette, 5);
+      gl.uniform1f(this.locations.useBpalTexture, 0);
       gl.uniform3fv(this.locations.lightPosition, this.options.lightPosition || [3.0, 4.0, 5.0]);
       gl.uniform3fv(this.locations.lightColor, this.options.lightColor || [0.92, 0.9, 0.82]);
       gl.uniform3fv(this.locations.ambientColor, this.options.ambientColor || [0.22, 0.22, 0.22]);
@@ -163,6 +174,79 @@
         this.gl.deleteTexture(texture);
         throw error;
       }
+    }
+
+    loadBpalShaderTexture(shaderData) {
+      validateBpalShaderTextureData(shaderData);
+
+      const gl = this.gl;
+      const textures = {
+        pixelIndices: gl.createTexture(),
+        blockPalettes: gl.createTexture(),
+        globalPalette: gl.createTexture(),
+      };
+
+      if (!textures.pixelIndices || !textures.blockPalettes || !textures.globalPalette) {
+        deleteTextureSet(gl, textures);
+        throw new Error("Could not create WebGL textures for BPAL indices");
+      }
+
+      try {
+        uploadDataTexture(gl, textures.pixelIndices, shaderData.pixelAtlas, 3);
+        uploadDataTexture(gl, textures.blockPalettes, shaderData.blockPaletteAtlas, 4);
+        uploadDataTexture(gl, textures.globalPalette, shaderData.paletteAtlas, 5);
+      } catch (error) {
+        deleteTextureSet(gl, textures);
+        throw error;
+      }
+
+      deleteTextureSet(gl, this.bpalTextures);
+      this.bpalTextures = textures;
+      this.bpalTextureInfo = shaderData;
+      this.applyBpalTextureUniforms();
+
+      return shaderData;
+    }
+
+    setBpalShaderTextureEnabled(enabled) {
+      if (enabled && !this.bpalTextureInfo) {
+        throw new Error("Load a BPAL texture before enabling shader indexing");
+      }
+
+      this.bpalShaderTextureEnabled = Boolean(enabled);
+      this.applyBpalTextureUniforms();
+    }
+
+    applyBpalTextureUniforms() {
+      const gl = this.gl;
+      const info = this.bpalTextureInfo;
+
+      gl.useProgram(this.program);
+      gl.uniform1f(this.locations.useBpalTexture, this.bpalShaderTextureEnabled && info ? 1 : 0);
+
+      if (!info) {
+        return;
+      }
+
+      gl.uniform2f(this.locations.bpalImageSize, info.width, info.height);
+      gl.uniform1f(this.locations.bpalBlockSize, info.blockSize);
+      gl.uniform1f(this.locations.bpalBlocksX, info.blocksX);
+      gl.uniform1f(this.locations.bpalLocalColorCount, info.localColorCount);
+      gl.uniform2f(
+        this.locations.bpalPixelAtlasSize,
+        info.pixelAtlas.width,
+        info.pixelAtlas.height
+      );
+      gl.uniform2f(
+        this.locations.bpalBlockPaletteAtlasSize,
+        info.blockPaletteAtlas.width,
+        info.blockPaletteAtlas.height
+      );
+      gl.uniform2f(
+        this.locations.bpalPaletteAtlasSize,
+        info.paletteAtlas.width,
+        info.paletteAtlas.height
+      );
     }
 
     resetMaterialMaps() {
@@ -303,6 +387,12 @@
       gl.bindTexture(gl.TEXTURE_2D, this.heightTexture);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, this.specularTexture);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.bpalTextures.pixelIndices);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, this.bpalTextures.blockPalettes);
+      gl.activeTexture(gl.TEXTURE5);
+      gl.bindTexture(gl.TEXTURE_2D, this.bpalTextures.globalPalette);
       gl.uniformMatrix4fv(this.locations.projection, false, this.projection);
       gl.uniformMatrix4fv(this.locations.model, false, this.model);
       gl.uniformMatrix3fv(this.locations.normalMatrix, false, mat3FromMat4(this.model));
@@ -388,6 +478,17 @@
       stoneTexture: gl.getUniformLocation(program, "uStoneTexture"),
       heightTexture: gl.getUniformLocation(program, "uHeightTexture"),
       specularTexture: gl.getUniformLocation(program, "uSpecularTexture"),
+      bpalPixelIndices: gl.getUniformLocation(program, "uBpalPixelIndices"),
+      bpalBlockPalettes: gl.getUniformLocation(program, "uBpalBlockPalettes"),
+      bpalGlobalPalette: gl.getUniformLocation(program, "uBpalGlobalPalette"),
+      useBpalTexture: gl.getUniformLocation(program, "uUseBpalTexture"),
+      bpalImageSize: gl.getUniformLocation(program, "uBpalImageSize"),
+      bpalBlockSize: gl.getUniformLocation(program, "uBpalBlockSize"),
+      bpalBlocksX: gl.getUniformLocation(program, "uBpalBlocksX"),
+      bpalLocalColorCount: gl.getUniformLocation(program, "uBpalLocalColorCount"),
+      bpalPixelAtlasSize: gl.getUniformLocation(program, "uBpalPixelAtlasSize"),
+      bpalBlockPaletteAtlasSize: gl.getUniformLocation(program, "uBpalBlockPaletteAtlasSize"),
+      bpalPaletteAtlasSize: gl.getUniformLocation(program, "uBpalPaletteAtlasSize"),
       heightTexelSize: gl.getUniformLocation(program, "uHeightTexelSize"),
       heightStrength: gl.getUniformLocation(program, "uHeightStrength"),
       lightPosition: gl.getUniformLocation(program, "uLightPosition"),
@@ -598,6 +699,59 @@
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 
     return { width, height };
+  }
+
+  function uploadDataTexture(gl, texture, atlas, unit) {
+    const format = atlas.channels === 1 ? gl.LUMINANCE : gl.RGBA;
+
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      format,
+      atlas.width,
+      atlas.height,
+      0,
+      format,
+      gl.UNSIGNED_BYTE,
+      atlas.data
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  }
+
+  function validateBpalShaderTextureData(data) {
+    const atlases = data && [data.pixelAtlas, data.blockPaletteAtlas, data.paletteAtlas];
+
+    if (
+      !data ||
+      !Number.isInteger(data.width) ||
+      !Number.isInteger(data.height) ||
+      !Number.isInteger(data.blockSize) ||
+      !Number.isInteger(data.blocksX) ||
+      !Number.isInteger(data.localColorCount) ||
+      !atlases ||
+      atlases.some((atlas) => !atlas || !(atlas.data instanceof Uint8Array))
+    ) {
+      throw new TypeError("BPAL shader texture data is invalid");
+    }
+  }
+
+  function deleteTextureSet(gl, textures) {
+    if (!textures) {
+      return;
+    }
+
+    Object.values(textures).forEach((texture) => {
+      if (texture) {
+        gl.deleteTexture(texture);
+      }
+    });
   }
 
   async function loadOptionalHeightMap(gl, texture, url, unit) {
