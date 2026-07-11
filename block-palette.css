@@ -97,6 +97,34 @@ button:hover:not(:disabled), button:focus-visible, select:focus-visible, input:f
 
 button:disabled { cursor: not-allowed; opacity: 0.45; }
 
+.range-label { min-width: 188px; }
+
+.range-label span {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.range-label output {
+  color: #f4f8fc;
+  font-variant-numeric: tabular-nums;
+}
+
+.diversity-label { min-width: 310px; }
+.diversity-caption b { color: #aab5c2; font-size: inherit; }
+
+.diversity-caption output {
+  color: #83b8ff;
+  text-align: center;
+  text-transform: none;
+}
+
+input[type="range"] {
+  height: 18px;
+  margin: 0;
+  accent-color: #4d96ed;
+}
+
 .status {
   min-height: 42px;
   margin-bottom: 14px;

@@ -22,7 +22,8 @@ Open `index.html` through a local server to choose between:
   selectable color count, optional Bayer or Floyd-Steinberg dithering, local
   image uploads, and PNG export
 - `block-palette.html` for block-based indexed color compression with one
-  shared image palette, selectable block sizes, and per-block local palettes
+  shared RGB565 or RGB888 image palette, selectable block sizes, and per-block
+  local palettes
 - `retro.html` for ZX Spectrum 256x192 `.scr` export and PC VGA Mode X
   320x240 four-plane image data with a separate 6-bit DAC palette; source
   images can be rotated by 90, 180, or 270 degrees before fitting

@@ -44,6 +44,26 @@ test("calculates the tightly packed 256-color, four-color block layout", () => {
   assert.equal(result.storage.totalBytes, 788);
 });
 
+test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () => {
+  const source = pixels([
+    [123, 201, 77, 255], [123, 201, 77, 255],
+    [123, 201, 77, 255], [123, 201, 77, 255],
+  ]);
+  const result = compressImage(source, 2, 2, {
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 4,
+    paletteColorBits: 16,
+    colorSpace: "rgb",
+  });
+
+  assert.equal(result.paletteColorBits, 16);
+  assert.deepEqual(Array.from(result.pixels.slice(0, 4)), [123, 202, 74, 255]);
+  assert.equal(result.palette[0].hex, "#7bca4a");
+  assert.equal(result.storage.globalPaletteBytes, 8);
+  assert.equal(result.storage.totalBytes, 10);
+});
+
 test("uses only local indices and global palette references that fit the format", () => {
   const values = [];
 
@@ -62,6 +82,115 @@ test("uses only local indices and global palette references that fit the format"
   assert.equal(result.blockCount, 4);
 });
 
+test("supports 4x4 and 64x64 block sizes", () => {
+  const source = new Uint8ClampedArray(64 * 64 * 4);
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    source[offset] = 80;
+    source[offset + 1] = 120;
+    source[offset + 2] = 160;
+    source[offset + 3] = 255;
+  }
+
+  const settings = { localColorCount: 2, globalColorCount: 2 };
+  const smallBlocks = compressImage(source, 64, 64, { ...settings, blockSize: 4 });
+  const largeBlock = compressImage(source, 64, 64, { ...settings, blockSize: 64 });
+
+  assert.equal(smallBlocks.blockCount, 256);
+  assert.equal(largeBlock.blockCount, 1);
+  assert.equal(smallBlocks.blockSize, 4);
+  assert.equal(largeBlock.blockSize, 64);
+});
+
+test("selects block colors by total error instead of frequency alone", () => {
+  const values = [];
+
+  for (let index = 0; index < 30; index += 1) {
+    values.push([0, 0, 0, 255]);
+  }
+
+  for (let index = 0; index < 20; index += 1) {
+    values.push([10, 10, 10, 255]);
+  }
+
+  for (let index = 0; index < 14; index += 1) {
+    values.push([255, 255, 255, 255]);
+  }
+
+  const result = compressImage(pixels(values), 8, 8, {
+    blockSize: 8,
+    localColorCount: 2,
+    globalColorCount: 4,
+    colorSpace: "rgb",
+  });
+  const selectedColors = Array.from(result.blockPaletteIndices.slice(0, 2))
+    .map((paletteIndex) => result.palette[paletteIndex].hex);
+
+  assert.ok(selectedColors.includes("#ffffff"));
+  assert.ok(Math.sqrt(result.meanSquaredError) < 6);
+});
+
+test("supports Bayer and Floyd-Steinberg dithering inside block palettes", () => {
+  const values = [];
+
+  for (let y = 0; y < 4; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      const value = Math.round(x / 15 * 255);
+
+      values.push([value, value, value, 255]);
+    }
+  }
+
+  const source = pixels(values);
+  const settings = {
+    blockSize: 4,
+    localColorCount: 2,
+    globalColorCount: 4,
+    colorSpace: "rgb",
+  };
+  const plain = compressImage(source, 16, 4, { ...settings, dithering: "none" });
+  const bayer2 = compressImage(source, 16, 4, { ...settings, dithering: "pattern-2x2" });
+  const bayer4 = compressImage(source, 16, 4, { ...settings, dithering: "pattern" });
+  const floyd = compressImage(source, 16, 4, { ...settings, dithering: "floyd-steinberg" });
+
+  assert.equal(bayer2.dithering, "pattern-2x2");
+  assert.equal(bayer4.dithering, "pattern");
+  assert.equal(floyd.dithering, "floyd-steinberg");
+  assert.notDeepEqual(Array.from(bayer2.pixels), Array.from(plain.pixels));
+  assert.notDeepEqual(Array.from(bayer4.pixels), Array.from(plain.pixels));
+  assert.notDeepEqual(Array.from(floyd.pixels), Array.from(plain.pixels));
+  assert.ok(Array.from(floyd.pixelIndices).every((index) => index < settings.localColorCount));
+});
+
+test("diversity weighting gives rare colors more influence in the common palette", () => {
+  const values = [];
+
+  for (let index = 0; index < 400; index += 1) {
+    values.push([0, 20, 100, 255]);
+    values.push([0, 120, 240, 255]);
+  }
+
+  for (let index = 0; index < 10; index += 1) {
+    values.push([0, 255, 0, 255]);
+  }
+
+  const source = pixels(values);
+  const settings = {
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 2,
+    colorSpace: "oklab",
+  };
+  const accurate = compressImage(source, values.length, 1, { ...settings, diversity: 0 });
+  const diverse = compressImage(source, values.length, 1, { ...settings, diversity: 1 });
+  const strongestAccurateGreen = Math.max(...accurate.palette.map(greenDominance));
+  const strongestDiverseGreen = Math.max(...diverse.palette.map(greenDominance));
+
+  assert.equal(accurate.diversity, 0);
+  assert.equal(diverse.diversity, 1);
+  assert.ok(strongestDiverseGreen > strongestAccurateGreen + 40);
+});
+
 test("rejects non-power-of-two format settings", () => {
   const source = pixels([[0, 0, 0, 255], [255, 255, 255, 255], [0, 0, 0, 255], [255, 255, 255, 255]]);
 
@@ -73,10 +202,41 @@ test("rejects non-power-of-two format settings", () => {
     () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 3, globalColorCount: 4 }),
     /localColorCount must be a power of two/
   );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      paletteColorBits: 20,
+    }),
+    /paletteColorBits must be either 16 or 24/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      dithering: "random",
+    }),
+    /Unsupported dithering mode/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      diversity: 1.1,
+    }),
+    /diversity must be between 0 and 1/
+  );
 });
 
 function pixels(values) {
   return new Uint8ClampedArray(values.flat());
+}
+
+function greenDominance(color) {
+  return color.g - (color.r + color.b) / 2;
 }
 
 function test(name, callback) {

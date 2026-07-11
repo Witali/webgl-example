@@ -12,7 +12,7 @@
         <div class="title-block">
           <a class="back-link" href="./index.html">← На главную</a>
           <h1>Блочно-палитровое сжатие</h1>
-          <p>Одна общая палитра для изображения и маленькая таблица ее индексов в каждом блоке.</p>
+          <p>Одна общая палитра RGB565 или RGB888 для изображения и маленькая таблица ее индексов в каждом блоке.</p>
         </div>
 
         <form id="controls">
@@ -29,9 +29,11 @@
           <label>
             Размер блока
             <select id="block-size" name="blockSize">
+              <option value="4">4 × 4</option>
               <option value="8" selected>8 × 8</option>
               <option value="16">16 × 16</option>
               <option value="32">32 × 32</option>
+              <option value="64">64 × 64</option>
             </select>
           </label>
 
@@ -57,10 +59,37 @@
           </label>
 
           <label>
+            Формат цвета палитры
+            <select id="palette-color-bits" name="paletteColorBits">
+              <option value="24" selected>24 бита · RGB888</option>
+              <option value="16">16 бит · RGB565</option>
+            </select>
+          </label>
+
+          <label>
             Цветовое пространство
             <select id="color-space" name="colorSpace">
               <option value="oklab" selected>OKLab</option>
               <option value="rgb">RGB</option>
+            </select>
+          </label>
+
+          <label class="range-label diversity-label">
+            <span class="diversity-caption">
+              <b>Точность</b>
+              <output id="diversity-value" for="diversity">Баланс</output>
+              <b>Разнообразие</b>
+            </span>
+            <input id="diversity" name="diversity" type="range" min="0" max="6" step="1" value="3">
+          </label>
+
+          <label>
+            Дизеринг
+            <select id="dithering" name="dithering">
+              <option value="none">Без дизеринга</option>
+              <option value="pattern-2x2">Паттерн Bayer 2×2</option>
+              <option value="pattern">Паттерн Bayer 4×4</option>
+              <option value="floyd-steinberg">Floyd–Steinberg</option>
             </select>
           </label>
 
@@ -143,6 +172,6 @@
       </section>
     </main>
 
-    <script src="./src/pages/block-palette-page.js?v=block-palette-1"></script>
+    <script src="./src/pages/block-palette-page.js?v=block-palette-5"></script>
   </body>
 </html>

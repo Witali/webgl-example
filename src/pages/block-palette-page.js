@@ -5,7 +5,11 @@ const imageSelect = document.getElementById("image-url");
 const blockSizeSelect = document.getElementById("block-size");
 const localColorCountSelect = document.getElementById("local-color-count");
 const globalColorCountSelect = document.getElementById("global-color-count");
+const paletteColorBitsSelect = document.getElementById("palette-color-bits");
 const colorSpaceSelect = document.getElementById("color-space");
+const diversityInput = document.getElementById("diversity");
+const diversityValue = document.getElementById("diversity-value");
+const ditheringSelect = document.getElementById("dithering");
 const uploadButton = document.getElementById("upload-button");
 const fileInput = document.getElementById("image-file");
 const processButton = document.getElementById("process-button");
@@ -40,6 +44,7 @@ const state = {
   uploadedUrl: null,
   worker: null,
   processingId: 0,
+  debounceTimer: 0,
   result: null,
   selectedBlock: 0,
 };
@@ -54,9 +59,22 @@ imageSelect.addEventListener("change", () => {
   loadImage(imageSelect.value, optionLabel(imageSelect.selectedOptions[0])).catch(showError);
 });
 
-for (const select of [blockSizeSelect, localColorCountSelect, globalColorCountSelect, colorSpaceSelect]) {
+for (const select of [
+  blockSizeSelect,
+  localColorCountSelect,
+  globalColorCountSelect,
+  paletteColorBitsSelect,
+  colorSpaceSelect,
+  ditheringSelect,
+]) {
   select.addEventListener("change", processImage);
 }
+
+diversityInput.addEventListener("input", () => {
+  updateDiversityLabel();
+  window.clearTimeout(state.debounceTimer);
+  state.debounceTimer = window.setTimeout(processImage, 180);
+});
 
 uploadButton.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => {
@@ -83,6 +101,7 @@ window.addEventListener("beforeunload", () => {
   releaseUploadedImage();
 });
 
+updateDiversityLabel();
 loadImage(imageSelect.value, optionLabel(imageSelect.selectedOptions[0])).catch(showError);
 
 async function loadImage(url, name) {
@@ -120,6 +139,8 @@ async function loadImage(url, name) {
 }
 
 function processImage() {
+  window.clearTimeout(state.debounceTimer);
+
   if (!state.sourceImageData) {
     return;
   }
@@ -131,11 +152,11 @@ function processImage() {
   const settings = getSettings();
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
-  const worker = new Worker("./src/palette/block-palette-worker.js?v=block-palette-1");
+  const worker = new Worker("./src/palette/block-palette-worker.js?v=block-palette-5");
 
   state.worker = worker;
   setStatus(
-    `Общая палитра ${settings.globalColorCount} · блок ${settings.blockSize}×${settings.blockSize} · ${settings.localColorCount} цвета на блок…`,
+    `Общая палитра ${settings.globalColorCount} · ${getPaletteFormatLabel(settings.paletteColorBits)} · ${getDiversityLabel()} · блок ${settings.blockSize}×${settings.blockSize} · ${settings.localColorCount} цвета на блок · ${getDitheringLabel(settings.dithering)}…`,
     "busy"
   );
 
@@ -154,7 +175,7 @@ function processImage() {
     stopWorker();
     setBusy(false);
     setStatus(
-      `Готово: ${formatInteger(event.data.blockCount)} блоков, ${event.data.localIndexBits} бит/пиксель внутри блока, ${formatBytes(event.data.storage.totalBytes)} всего.`
+      `Готово: ${formatInteger(event.data.blockCount)} блоков, ${event.data.localIndexBits} бит/пиксель внутри блока, ${formatBytes(event.data.storage.totalBytes)} всего · ${getDiversityLabel()} · ${getDitheringLabel(event.data.dithering)}.`
     );
   });
 
@@ -190,13 +211,13 @@ function renderResult(result) {
   processingTime.textContent = `${result.durationMs.toFixed(1)} мс · ${getColorSpaceLabel(result.colorSpace)}`;
 
   storageGlobal.textContent = formatBytes(result.storage.globalPaletteBytes);
-  storageGlobalFormula.textContent = `${result.globalColorCount} × 3 байта RGB`;
+  storageGlobalFormula.textContent = `${result.globalColorCount} × ${result.paletteColorBits / 8} байта · ${getPaletteFormatLabel(result.paletteColorBits)}`;
   storageBlocks.textContent = formatBytes(result.storage.blockPaletteBytes);
   storageBlocksFormula.textContent = `${formatInteger(result.blockCount)} × ${result.localColorCount} × ${result.globalIndexBits} бит`;
   storagePixels.textContent = formatBytes(result.storage.pixelDataBytes);
   storagePixelsFormula.textContent = `${formatInteger(result.width * result.height)} × ${result.localIndexBits} бит`;
   storageTotal.textContent = formatBytes(result.storage.totalBytes);
-  paletteSummary.textContent = `${result.activeGlobalColorCount} активных · ${result.resultColorCount} использовано`;
+  paletteSummary.textContent = `${result.activeGlobalColorCount} активных · ${result.resultColorCount} использовано · ${getPaletteFormatLabel(result.paletteColorBits)}`;
 
   globalPaletteElement.replaceChildren(...result.palette.map(createGlobalSwatch));
   renderSelectedBlock();
@@ -212,6 +233,9 @@ function renderResult(result) {
     blockCount: result.blockCount,
     localColorCount: result.localColorCount,
     globalColorCount: result.globalColorCount,
+    paletteColorBits: result.paletteColorBits,
+    dithering: result.dithering,
+    diversity: result.diversity,
     storage: result.storage,
     rmse: Math.sqrt(result.meanSquaredError),
     durationMs: result.durationMs,
@@ -335,7 +359,10 @@ function getSettings() {
     blockSize: Number(blockSizeSelect.value),
     localColorCount: Number(localColorCountSelect.value),
     globalColorCount: Number(globalColorCountSelect.value),
+    paletteColorBits: Number(paletteColorBitsSelect.value),
     colorSpace: colorSpaceSelect.value,
+    dithering: ditheringSelect.value,
+    diversity: getDiversity(),
   };
 }
 
@@ -367,7 +394,9 @@ function downloadResult() {
     const link = document.createElement("a");
 
     link.href = url;
-    link.download = `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}.png`;
+    const ditherSuffix = settings.dithering === "none" ? "" : `-${settings.dithering}`;
+
+    link.download = `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${ditherSuffix}.png`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, "image/png");
@@ -437,7 +466,10 @@ function setBusy(busy) {
   blockSizeSelect.disabled = busy;
   localColorCountSelect.disabled = busy;
   globalColorCountSelect.disabled = busy;
+  paletteColorBitsSelect.disabled = busy;
   colorSpaceSelect.disabled = busy;
+  diversityInput.disabled = busy;
+  ditheringSelect.disabled = busy;
 }
 
 function setStatus(message, kind) {
@@ -468,6 +500,47 @@ function formatPaletteIndex(index, bits) {
 
 function getColorSpaceLabel(value) {
   return value === "rgb" ? "RGB" : "OKLab";
+}
+
+function getPaletteFormatLabel(bits) {
+  return Number(bits) === 16 ? "RGB565" : "RGB888";
+}
+
+function getDitheringLabel(mode) {
+  switch (mode) {
+    case "pattern-2x2":
+      return "Bayer 2×2";
+    case "pattern":
+      return "Bayer 4×4";
+    case "floyd-steinberg":
+      return "Floyd–Steinberg";
+    default:
+      return "без дизеринга";
+  }
+}
+
+function getDiversityLevel() {
+  return Math.max(0, Math.min(6, Math.round(Number(diversityInput.value) || 0)));
+}
+
+function getDiversity() {
+  return getDiversityLevel() / 6;
+}
+
+function updateDiversityLabel() {
+  diversityValue.textContent = getDiversityLabel();
+}
+
+function getDiversityLabel() {
+  return [
+    "Макс. точность",
+    "Точность 5/6",
+    "Точность 4/6",
+    "Баланс",
+    "Разнообразие 4/6",
+    "Разнообразие 5/6",
+    "Макс. разнообразие",
+  ][getDiversityLevel()];
 }
 
 function optionLabel(option) {
