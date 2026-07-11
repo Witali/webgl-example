@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>WebGL Rotating Cube</title>
-    <link rel="stylesheet" href="./style.css?v=cube-pointer-controls">
+    <link rel="stylesheet" href="./style.css?v=cube-bpal-texture">
   </head>
   <body>
     <a class="back-link" href="./index.html">Home</a>
@@ -25,10 +25,17 @@
         <span>Рельеф <output id="height-strength-value" for="height-strength">0.60</output></span>
         <input id="height-strength" type="range" min="0" max="1" step="0.05" value="0.60">
       </label>
+      <label class="bpal-upload">
+        <input id="bpal-file" type="file" accept=".bpal,application/octet-stream">
+        <span>Загрузить BPAL</span>
+      </label>
+      <output id="bpal-status" class="bpal-status" role="status" aria-live="polite">JPEG по умолчанию</output>
     </form>
     <canvas id="gl-canvas" aria-label="Rotating WebGL cube"></canvas>
     <script src="./src/decoders/gpu-jpeg.js"></script>
-    <script src="./src/core/textured-cube.js?v=pre-tessellated-mesh"></script>
-    <script src="./src/pages/cube-page.js?v=cube-pointer-controls"></script>
+    <script src="./src/palette/block-palette-format.js?v=block-palette-3"></script>
+    <script src="./src/decoders/bpal-texture.js?v=bpal-texture-1"></script>
+    <script src="./src/core/textured-cube.js?v=bpal-pixel-texture"></script>
+    <script src="./src/pages/cube-page.js?v=cube-bpal-texture"></script>
   </body>
 </html>

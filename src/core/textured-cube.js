@@ -133,6 +133,65 @@
       });
     }
 
+    loadTexturePixels(pixels, width, height, options) {
+      const textureOptions = options || {};
+      const texture = this.gl.createTexture();
+
+      if (!texture) {
+        throw new Error("Could not create WebGL texture for RGBA pixels");
+      }
+
+      try {
+        const textureInfo = uploadPixelTexture(
+          this.gl,
+          texture,
+          pixels,
+          width,
+          height,
+          0,
+          { flipY: textureOptions.flipY !== false }
+        );
+
+        if (textureOptions.resetMaterialMaps !== false) {
+          this.resetMaterialMaps();
+        }
+
+        this.replaceTexture(texture);
+
+        return textureInfo;
+      } catch (error) {
+        this.gl.deleteTexture(texture);
+        throw error;
+      }
+    }
+
+    resetMaterialMaps() {
+      uploadPixelTexture(
+        this.gl,
+        this.heightTexture,
+        new Uint8Array([128, 128, 128, 255]),
+        1,
+        1,
+        1,
+        { flipY: false }
+      );
+      uploadPixelTexture(
+        this.gl,
+        this.specularTexture,
+        new Uint8Array([255, 255, 255, 255]),
+        1,
+        1,
+        2,
+        { flipY: false }
+      );
+
+      this.heightField = null;
+      this.heightTexelSize = [1, 1];
+      this.replaceGeometry(this.createGeometry(), this.gl.DYNAMIC_DRAW);
+      this.gl.useProgram(this.program);
+      this.gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
+    }
+
     async loadMaterialMapsForTexture(textureUrl, options) {
       const mapUrls = createMaterialMapUrls(textureUrl, options);
       const [heightResult] = await Promise.all([
@@ -501,6 +560,44 @@
       width: image.naturalWidth || image.width,
       height: image.naturalHeight || image.height,
     };
+  }
+
+  function uploadPixelTexture(gl, texture, pixels, width, height, unit, options) {
+    const uploadOptions = options || {};
+
+    if (!(pixels instanceof Uint8Array) && !(pixels instanceof Uint8ClampedArray)) {
+      throw new TypeError("Texture pixels must be Uint8Array or Uint8ClampedArray");
+    }
+
+    if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1) {
+      throw new RangeError("Texture dimensions must be positive integers");
+    }
+
+    if (pixels.length !== width * height * 4) {
+      throw new RangeError("Texture RGBA buffer length does not match its dimensions");
+    }
+
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, Boolean(uploadOptions.flipY));
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixels
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+    return { width, height };
   }
 
   async function loadOptionalHeightMap(gl, texture, url, unit) {

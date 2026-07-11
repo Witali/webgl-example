@@ -12,6 +12,8 @@ const fpsCounter = document.getElementById("fps-counter");
 const materialControls = document.getElementById("material-controls");
 const heightStrengthInput = document.getElementById("height-strength");
 const heightStrengthValue = document.getElementById("height-strength-value");
+const bpalFileInput = document.getElementById("bpal-file");
+const bpalStatus = document.getElementById("bpal-status");
 const gl = canvas.getContext("webgl", { antialias: true });
 const fpsState = {
   frameCount: 0,
@@ -30,6 +32,7 @@ const AUTO_ROTATE_Y_SPEED = 0.001;
 const POINTER_ROTATE_SPEED = 0.01;
 const CLICK_DRAG_THRESHOLD = 4;
 let cubeRenderer = null;
+let bpalLoadId = 0;
 
 if (!gl) {
   document.body.textContent = "WebGL is not supported in this browser.";
@@ -47,7 +50,8 @@ async function start() {
   window.__cubeMotionState = cubeMotionState;
   initializeMaterialControls();
   initializeCubePointerControls();
-  cubeRenderer.loadTexture("assets/stone-texture-wic.jpg");
+  await cubeRenderer.loadTexture("assets/stone-texture-wic.jpg");
+  initializeBpalTextureControls();
   requestAnimationFrame(render);
 }
 
@@ -111,6 +115,75 @@ function initializeMaterialControls() {
     updateHeightStrengthLabel();
   });
   applySelectedMaterial();
+}
+
+function initializeBpalTextureControls() {
+  if (!bpalFileInput || !bpalStatus) {
+    return;
+  }
+
+  bpalFileInput.addEventListener("change", () => {
+    const file = bpalFileInput.files && bpalFileInput.files[0];
+
+    if (file) {
+      loadBpalTextureFile(file).catch((error) => {
+        console.error("BPAL texture load failed.", error);
+        setBpalStatus(error && error.message ? error.message : String(error), true);
+      });
+    }
+  });
+}
+
+async function loadBpalTextureFile(file) {
+  if (!window.BpalTextureDecoder) {
+    throw new Error("BPAL texture decoder is unavailable");
+  }
+
+  const loadId = ++bpalLoadId;
+
+  bpalFileInput.disabled = true;
+  setBpalStatus(`Чтение ${file.name}…`, false);
+
+  try {
+    const bytes = await file.arrayBuffer();
+
+    if (loadId !== bpalLoadId) {
+      return;
+    }
+
+    const decoded = window.BpalTextureDecoder.decode(bytes);
+
+    cubeRenderer.loadTexturePixels(decoded.pixels, decoded.width, decoded.height, {
+      flipY: true,
+      resetMaterialMaps: true,
+    });
+
+    window.__cubeBpalTexture = {
+      name: file.name,
+      width: decoded.width,
+      height: decoded.height,
+      version: decoded.version,
+      blockSize: decoded.blockSize,
+      localColorCount: decoded.localColorCount,
+      globalColorCount: decoded.globalColorCount,
+      paletteMode: decoded.paletteMode,
+    };
+
+    setBpalStatus(
+      `${file.name} · ${decoded.width}×${decoded.height} · BPAL v${decoded.version}`,
+      false
+    );
+  } finally {
+    if (loadId === bpalLoadId) {
+      bpalFileInput.disabled = false;
+      bpalFileInput.value = "";
+    }
+  }
+}
+
+function setBpalStatus(message, isError) {
+  bpalStatus.textContent = message;
+  bpalStatus.classList.toggle("is-error", Boolean(isError));
 }
 
 function initializeCubePointerControls() {
