@@ -17,6 +17,11 @@ Open `index.html` through a local server to choose between:
 - `cube.html` for the textured rotating cube
 - `image-decoding.html` for browser-vs-library JPEG comparison with URL and
   local file upload inputs
+- `palette.html` for weighted OKLab or RGB k-means palette reduction with a
+  selectable color count, optional Bayer or Floyd-Steinberg dithering, local
+  image uploads, and PNG export
+- `retro.html` for ZX Spectrum 256x192 `.scr` export and PC VGA Mode X
+  320x240 four-plane image data with a separate 6-bit DAC palette
 - `benchmarks.html` for native browser, JS-only, WASM, WASM+GPU, GPU, WebGPU
   WGSL, optional WebGPU resident, and WebP decode timings
 - `browser-specs.html` for WebGPU, WebGL, and WebAssembly capability checks

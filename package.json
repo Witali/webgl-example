@@ -1,6 +1,7 @@
 {
   "scripts": {
     "start": "http-server . -p 8000 -c-1",
+    "test": "node tests/run-tests.js",
     "build:wasm": "node tools/build-wasm.js",
     "benchmark:jpeg": "node tools/run-jpeg-benchmark.js",
     "encode:webp-assets": "node tools/encode-webp-assets.js",

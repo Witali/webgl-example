@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ретро-конвертер изображений</title>
+    <link rel="stylesheet" href="./palette.css">
+    <link rel="stylesheet" href="./retro.css">
+  </head>
+  <body>
+    <main>
+      <header class="page-header retro-header">
+        <div class="title-block">
+          <a class="back-link" href="./index.html">← На главную</a>
+          <h1>Ретро-конвертер</h1>
+          <p>Подготовка изображений и бинарных экранных данных для классических видеорежимов.</p>
+        </div>
+
+        <form id="controls">
+          <label>
+            Изображение
+            <select id="image-url" name="image">
+              <option value="./assets/stone-texture-small.jpg">stone-texture-small.jpg</option>
+              <option value="./assets/benchmark-jpegs/landscape-alaska.jpg">landscape-alaska.jpg</option>
+              <option value="./assets/benchmark-jpegs/clipart-apple.jpg">clipart-apple.jpg</option>
+            </select>
+          </label>
+
+          <label>
+            Целевой формат
+            <select id="retro-mode" name="mode">
+              <option value="zx-spectrum">ZX Spectrum · 256×192</option>
+              <option value="mode-x">PC VGA Mode X · 320×240</option>
+            </select>
+          </label>
+
+          <label>
+            Масштабирование
+            <select id="image-fit" name="fit">
+              <option value="cover">Заполнить с обрезкой</option>
+              <option value="contain">Вписать целиком</option>
+              <option value="stretch">Растянуть</option>
+            </select>
+          </label>
+
+          <label>
+            Цветовое пространство
+            <select id="color-space" name="colorSpace">
+              <option value="oklab" selected>OKLab</option>
+              <option value="rgb">RGB</option>
+            </select>
+          </label>
+
+          <label>
+            Дизеринг
+            <select id="dithering" name="dithering">
+              <option value="none">Без дизеринга</option>
+              <option value="pattern">Паттерн Bayer 4×4</option>
+              <option value="floyd-steinberg">Floyd–Steinberg</option>
+            </select>
+          </label>
+
+          <label class="range-label">
+            <span>Цветов Mode X <output id="color-count-value" for="color-count">256</output></span>
+            <input id="color-count" name="colorCount" type="range" min="2" max="256" step="1" value="256">
+          </label>
+
+          <button id="upload-button" type="button">Загрузить изображение</button>
+          <input id="image-file" type="file" accept="image/*" hidden>
+          <button id="process-button" type="submit">Преобразовать</button>
+          <button id="download-data-button" type="button" disabled>Скачать .scr</button>
+          <button id="download-palette-button" type="button" disabled>Скачать .pal</button>
+          <button id="download-png-button" type="button" disabled>Скачать PNG</button>
+        </form>
+      </header>
+
+      <section id="status" class="status" role="status" aria-live="polite">Подготовка…</section>
+
+      <section class="metrics" aria-label="Параметры результата">
+        <div>
+          <span>Профиль</span>
+          <strong id="metric-profile">—</strong>
+        </div>
+        <div>
+          <span>Разрешение</span>
+          <strong id="metric-size">—</strong>
+        </div>
+        <div>
+          <span>Использовано цветов</span>
+          <strong id="metric-colors">—</strong>
+        </div>
+        <div>
+          <span>Экранные данные</span>
+          <strong id="metric-bytes">—</strong>
+        </div>
+        <div>
+          <span>Время обработки</span>
+          <strong id="metric-time">—</strong>
+        </div>
+      </section>
+
+      <section class="format-note" aria-labelledby="format-note-title">
+        <strong id="format-note-title">ZX Spectrum .scr</strong>
+        <span id="format-note-text">6144 байта bitmap в аппаратном порядке строк и 768 байт атрибутов 8×8.</span>
+      </section>
+
+      <section class="comparison" aria-label="Сравнение изображений">
+        <figure>
+          <figcaption>Исходное изображение</figcaption>
+          <div class="canvas-viewport">
+            <canvas id="source-canvas"></canvas>
+          </div>
+        </figure>
+        <figure>
+          <figcaption id="result-caption">ZX Spectrum · аппаратный предпросмотр</figcaption>
+          <div class="canvas-viewport">
+            <canvas id="result-canvas"></canvas>
+          </div>
+        </figure>
+      </section>
+
+      <section class="palette-section" aria-labelledby="palette-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="palette-title">Использованная палитра</h2>
+            <p id="palette-description">Цвета, реально присутствующие в преобразованном изображении.</p>
+          </div>
+          <span id="palette-summary"></span>
+        </div>
+        <div id="palette" class="palette" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="./retro-page.js?v=retro-2"></script>
+  </body>
+</html>

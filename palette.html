@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Палитра изображения</title>
+    <link rel="stylesheet" href="./palette.css">
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div class="title-block">
+          <a class="back-link" href="./index.html">← На главную</a>
+          <h1>Палитра изображения</h1>
+          <p>Кластеризация цветов изображения в выбранном пространстве и замена каждого пикселя ближайшим цветом палитры.</p>
+        </div>
+
+        <form id="controls">
+          <label>
+            Изображение
+            <select id="image-url" name="image">
+              <option value="./assets/stone-texture-small.jpg">stone-texture-small.jpg</option>
+              <option value="./assets/stone-texture-tiny.jpg">stone-texture-tiny.jpg</option>
+              <option value="./assets/benchmark-jpegs/landscape-alaska.jpg">landscape-alaska.jpg</option>
+              <option value="./assets/benchmark-jpegs/clipart-apple.jpg">clipart-apple.jpg</option>
+            </select>
+          </label>
+
+          <label>
+            Цветовое пространство
+            <select id="color-space" name="colorSpace">
+              <option value="oklab" selected>OKLab</option>
+              <option value="rgb">RGB</option>
+            </select>
+          </label>
+
+          <label class="range-label">
+            <span>Цветов в палитре <output id="color-count-value" for="color-count">8</output></span>
+            <input id="color-count" name="colorCount" type="range" min="2" max="32" step="1" value="8">
+          </label>
+
+          <label>
+            Дизеринг
+            <select id="dithering" name="dithering">
+              <option value="none">Без дизеринга</option>
+              <option value="pattern">Паттерн Bayer 4×4</option>
+              <option value="floyd-steinberg">Floyd–Steinberg</option>
+            </select>
+          </label>
+
+          <button id="upload-button" type="button">Загрузить изображение</button>
+          <input id="image-file" type="file" accept="image/*" hidden>
+          <button id="process-button" type="submit">Преобразовать</button>
+          <button id="download-button" type="button" disabled>Скачать PNG</button>
+        </form>
+      </header>
+
+      <section id="status" class="status" role="status" aria-live="polite">Подготовка…</section>
+
+      <section class="metrics" aria-label="Метрики преобразования">
+        <div>
+          <span>Размер</span>
+          <strong id="metric-size">—</strong>
+        </div>
+        <div>
+          <span>Исходных цветов</span>
+          <strong id="metric-source-colors">—</strong>
+        </div>
+        <div>
+          <span>Цветов результата</span>
+          <strong id="metric-result-colors">—</strong>
+        </div>
+        <div>
+          <span>Время k-means</span>
+          <strong id="metric-time">—</strong>
+        </div>
+        <div>
+          <span>RMSE на канал</span>
+          <strong id="metric-error">—</strong>
+        </div>
+      </section>
+
+      <section class="comparison" aria-label="Сравнение изображений">
+        <figure>
+          <figcaption>Исходное изображение</figcaption>
+          <div class="canvas-viewport">
+            <canvas id="source-canvas"></canvas>
+          </div>
+        </figure>
+        <figure>
+          <figcaption>Изображение с палитрой</figcaption>
+          <div class="canvas-viewport">
+            <canvas id="result-canvas"></canvas>
+          </div>
+        </figure>
+      </section>
+
+      <section class="palette-section" aria-labelledby="palette-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="palette-title">Палитра</h2>
+            <p>Центры кластеров как итоговые sRGB-цвета, отсортированные по доле пикселей.</p>
+          </div>
+          <span id="iteration-count"></span>
+        </div>
+        <div id="palette" class="palette" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="./palette-page.js?v=color-space-1"></script>
+  </body>
+</html>
