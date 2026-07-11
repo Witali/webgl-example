@@ -2,7 +2,11 @@
 
 const assert = require("node:assert/strict");
 const { encodeBlockPaletteFile } = require("../src/palette/block-palette-format.js");
-const { decode, createShaderTextureData } = require("../src/decoders/bpal-texture.js");
+const {
+  decode,
+  createShaderTextureData,
+  createMipmappedShaderTextureData,
+} = require("../src/decoders/bpal-texture.js");
 
 test("decodes a BPAL file into uploadable RGBA texture pixels", () => {
   const bytes = encodeBlockPaletteFile({
@@ -90,6 +94,51 @@ test("rejects BPAL shader atlases larger than the WebGL texture limit", () => {
       palette: [{ r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 }],
     }, 2),
     /exceeds the WebGL texture size limit/
+  );
+});
+
+test("builds independently indexed BPAL mip levels for shader filtering", () => {
+  const bytes = encodeBlockPaletteFile({
+    width: 4,
+    height: 4,
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 2,
+    paletteColorBits: 24,
+    paletteMode: "explicit",
+    palette: [
+      { r: 0, g: 0, b: 0 },
+      { r: 255, g: 255, b: 255 },
+    ],
+    blockPaletteIndices: new Uint16Array([
+      0, 1, 0, 1,
+      0, 1, 0, 1,
+    ]),
+    pixelIndices: new Uint8Array([
+      0, 0, 1, 1,
+      0, 0, 1, 1,
+      1, 1, 0, 0,
+      1, 1, 0, 0,
+    ]),
+  });
+  const mipmapped = createMipmappedShaderTextureData(decode(bytes), 64);
+
+  assert.equal(mipmapped.mipCount, 3);
+  assert.deepEqual(
+    mipmapped.levels.map((level) => [level.width, level.height]),
+    [[4, 4], [2, 2], [1, 1]]
+  );
+  assert.deepEqual(
+    mipmapped.levels.map((level) => level.pixelOffset),
+    [0, 16, 20]
+  );
+  assert.ok(mipmapped.pixelAtlas.data.length >= 21);
+  assert.ok(mipmapped.blockPaletteAtlas.data.length >= 12 * 4);
+  assert.equal(
+    mipmapped.gpuBytes,
+    mipmapped.pixelAtlas.data.byteLength +
+      mipmapped.blockPaletteAtlas.data.byteLength +
+      mipmapped.paletteAtlas.data.byteLength
   );
 });
 

@@ -17,6 +17,13 @@
   };
   const DEFAULT_TESSELLATION_SEGMENTS = 64;
   const DEFAULT_GEOMETRY_DISPLACEMENT_SCALE = 0.28;
+  const MAX_BPAL_MIP_LEVELS = 16;
+  const BPAL_FILTER_MODES = {
+    nearest: 0,
+    bilinear: 1,
+    trilinear: 2,
+    anisotropic: 3,
+  };
   const FACE_DEFINITIONS = [
     { origin: [-1, -1,  1], uAxis: [ 2, 0,  0], vAxis: [0, 2,  0], normal: [ 0,  0,  1] },
     { origin: [ 1, -1, -1], uAxis: [-2, 0,  0], vAxis: [0, 2,  0], normal: [ 0,  0, -1] },
@@ -88,6 +95,11 @@
       };
       this.bpalTextureInfo = null;
       this.bpalShaderTextureEnabled = false;
+      this.bpalSamplerOptions = {
+        filterMode: "trilinear",
+        maxAnisotropy: 4,
+        lodBias: 0,
+      };
       this.heightTexelSize = [1, 1];
 
       gl.useProgram(this.program);
@@ -105,6 +117,7 @@
       gl.uniform3fv(this.locations.viewPosition, this.viewPosition);
       gl.uniform2fv(this.locations.heightTexelSize, this.heightTexelSize);
       this.setMaterial(this.options.material || "matte");
+      this.applyBpalSamplerUniforms();
     }
 
     async loadTexture(url, options) {
@@ -247,6 +260,65 @@
         info.paletteAtlas.width,
         info.paletteAtlas.height
       );
+
+      if (Array.isArray(info.levels)) {
+        const fallback = info.levels[info.levels.length - 1];
+
+        gl.uniform1f(this.locations.bpalMipCount, info.mipCount);
+
+        for (let index = 0; index < MAX_BPAL_MIP_LEVELS; index += 1) {
+          const level = info.levels[index] || fallback;
+
+          gl.uniform4f(
+            this.locations.bpalMipInfo[index],
+            level.width,
+            level.height,
+            level.pixelOffset,
+            level.blockPaletteOffset
+          );
+          gl.uniform2f(
+            this.locations.bpalMipBlockInfo[index],
+            level.blocksX,
+            level.blocksY
+          );
+        }
+      }
+
+      this.applyBpalSamplerUniforms();
+    }
+
+    setBpalSamplerOptions(options) {
+      const values = options || {};
+      const filterMode = values.filterMode || this.bpalSamplerOptions.filterMode;
+
+      if (!Object.prototype.hasOwnProperty.call(BPAL_FILTER_MODES, filterMode)) {
+        throw new RangeError(`Unsupported BPAL filter mode: ${filterMode}`);
+      }
+
+      this.bpalSamplerOptions = {
+        filterMode,
+        maxAnisotropy: clamp(Number(
+          values.maxAnisotropy === undefined
+            ? this.bpalSamplerOptions.maxAnisotropy
+            : values.maxAnisotropy
+        ), 1, 8),
+        lodBias: clamp(Number(
+          values.lodBias === undefined ? this.bpalSamplerOptions.lodBias : values.lodBias
+        ), -4, 4),
+      };
+      this.applyBpalSamplerUniforms();
+    }
+
+    applyBpalSamplerUniforms() {
+      const gl = this.gl;
+
+      gl.useProgram(this.program);
+      gl.uniform1f(
+        this.locations.bpalFilterMode,
+        BPAL_FILTER_MODES[this.bpalSamplerOptions.filterMode]
+      );
+      gl.uniform1f(this.locations.bpalMaxAnisotropy, this.bpalSamplerOptions.maxAnisotropy);
+      gl.uniform1f(this.locations.bpalLodBias, this.bpalSamplerOptions.lodBias);
     }
 
     resetMaterialMaps() {
@@ -489,6 +561,18 @@
       bpalPixelAtlasSize: gl.getUniformLocation(program, "uBpalPixelAtlasSize"),
       bpalBlockPaletteAtlasSize: gl.getUniformLocation(program, "uBpalBlockPaletteAtlasSize"),
       bpalPaletteAtlasSize: gl.getUniformLocation(program, "uBpalPaletteAtlasSize"),
+      bpalMipCount: gl.getUniformLocation(program, "uBpalMipCount"),
+      bpalMipInfo: Array.from(
+        { length: MAX_BPAL_MIP_LEVELS },
+        (_, index) => gl.getUniformLocation(program, `uBpalMipInfo${index}`)
+      ),
+      bpalMipBlockInfo: Array.from(
+        { length: MAX_BPAL_MIP_LEVELS },
+        (_, index) => gl.getUniformLocation(program, `uBpalMipBlockInfo${index}`)
+      ),
+      bpalFilterMode: gl.getUniformLocation(program, "uBpalFilterMode"),
+      bpalMaxAnisotropy: gl.getUniformLocation(program, "uBpalMaxAnisotropy"),
+      bpalLodBias: gl.getUniformLocation(program, "uBpalLodBias"),
       heightTexelSize: gl.getUniformLocation(program, "uHeightTexelSize"),
       heightStrength: gl.getUniformLocation(program, "uHeightStrength"),
       lightPosition: gl.getUniformLocation(program, "uLightPosition"),
