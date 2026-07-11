@@ -7,18 +7,26 @@ const localColorCountSelect = document.getElementById("local-color-count");
 const globalColorCountSelect = document.getElementById("global-color-count");
 const paletteColorBitsSelect = document.getElementById("palette-color-bits");
 const colorSpaceSelect = document.getElementById("color-space");
+const algorithmSelect = document.getElementById("algorithm");
 const diversityInput = document.getElementById("diversity");
 const diversityValue = document.getElementById("diversity-value");
 const ditheringSelect = document.getElementById("dithering");
 const uploadButton = document.getElementById("upload-button");
 const fileInput = document.getElementById("image-file");
 const processButton = document.getElementById("process-button");
+const optimizeButton = document.getElementById("optimize-button");
+const downloadFileButton = document.getElementById("download-file-button");
 const downloadButton = document.getElementById("download-button");
 const showGridInput = document.getElementById("show-grid");
 const statusElement = document.getElementById("status");
+const sourceViewport = document.getElementById("source-viewport");
+const resultViewport = document.getElementById("result-viewport");
+const sourceStage = document.getElementById("source-stage");
+const resultStage = document.getElementById("result-stage");
 const sourceCanvas = document.getElementById("source-canvas");
 const resultCanvas = document.getElementById("result-canvas");
 const gridCanvas = document.getElementById("grid-canvas");
+const zoomLevel = document.getElementById("zoom-level");
 const globalPaletteElement = document.getElementById("global-palette");
 const blockPaletteElement = document.getElementById("block-palette");
 const blockLabel = document.getElementById("block-label");
@@ -30,6 +38,8 @@ const metricPayload = document.getElementById("metric-payload");
 const metricBpp = document.getElementById("metric-bpp");
 const metricRatio = document.getElementById("metric-ratio");
 const metricError = document.getElementById("metric-error");
+const storageHeader = document.getElementById("storage-header");
+const storageHeaderFormula = document.getElementById("storage-header-formula");
 const storageGlobal = document.getElementById("storage-global");
 const storageGlobalFormula = document.getElementById("storage-global-formula");
 const storageBlocks = document.getElementById("storage-blocks");
@@ -37,24 +47,37 @@ const storageBlocksFormula = document.getElementById("storage-blocks-formula");
 const storagePixels = document.getElementById("storage-pixels");
 const storagePixelsFormula = document.getElementById("storage-pixels-formula");
 const storageTotal = document.getElementById("storage-total");
+const storageTotalFormula = document.getElementById("storage-total-formula");
 const integerFormatter = new Intl.NumberFormat("ru-RU");
 const state = {
   sourceImageData: null,
   sourceName: "image",
   uploadedUrl: null,
   worker: null,
+  optimizerWorker: null,
   processingId: 0,
   debounceTimer: 0,
   result: null,
   selectedBlock: 0,
+  imageWidth: 0,
+  imageHeight: 0,
+  displayBaseScale: 1,
+  zoom: 1,
+  synchronizingScroll: false,
+  optimizationApplied: false,
 };
+
+const MIN_ZOOM = 0.125;
+const MAX_ZOOM = 16;
 
 controls.addEventListener("submit", (event) => {
   event.preventDefault();
+  state.optimizationApplied = false;
   processImage();
 });
 
 imageSelect.addEventListener("change", () => {
+  state.optimizationApplied = false;
   releaseUploadedImage();
   loadImage(imageSelect.value, optionLabel(imageSelect.selectedOptions[0])).catch(showError);
 });
@@ -65,18 +88,24 @@ for (const select of [
   globalColorCountSelect,
   paletteColorBitsSelect,
   colorSpaceSelect,
+  algorithmSelect,
   ditheringSelect,
 ]) {
-  select.addEventListener("change", processImage);
+  select.addEventListener("change", () => {
+    state.optimizationApplied = false;
+    processImage();
+  });
 }
 
 diversityInput.addEventListener("input", () => {
+  state.optimizationApplied = false;
   updateDiversityLabel();
   window.clearTimeout(state.debounceTimer);
   state.debounceTimer = window.setTimeout(processImage, 180);
 });
 
 uploadButton.addEventListener("click", () => fileInput.click());
+optimizeButton.addEventListener("click", optimizeSettings);
 fileInput.addEventListener("change", () => {
   const file = fileInput.files && fileInput.files[0];
 
@@ -85,6 +114,7 @@ fileInput.addEventListener("change", () => {
   }
 
   releaseUploadedImage();
+  state.optimizationApplied = false;
   state.uploadedUrl = URL.createObjectURL(file);
   const option = new Option(`Загружено: ${file.name}`, state.uploadedUrl, true, true);
 
@@ -93,11 +123,17 @@ fileInput.addEventListener("change", () => {
   loadImage(state.uploadedUrl, file.name).catch(showError);
 });
 
+downloadFileButton.addEventListener("click", downloadBlockPaletteFile);
 downloadButton.addEventListener("click", downloadResult);
 showGridInput.addEventListener("change", drawGrid);
 resultCanvas.addEventListener("click", selectBlockFromPointer);
+sourceViewport.addEventListener("scroll", () => synchronizeScroll(sourceViewport, resultViewport), { passive: true });
+resultViewport.addEventListener("scroll", () => synchronizeScroll(resultViewport, sourceViewport), { passive: true });
+sourceViewport.addEventListener("wheel", zoomFromWheel, { passive: false });
+resultViewport.addEventListener("wheel", zoomFromWheel, { passive: false });
 window.addEventListener("beforeunload", () => {
   stopWorker();
+  stopOptimizer();
   releaseUploadedImage();
 });
 
@@ -106,6 +142,7 @@ loadImage(imageSelect.value, optionLabel(imageSelect.selectedOptions[0])).catch(
 
 async function loadImage(url, name) {
   stopWorker();
+  stopOptimizer();
   resetResult();
   setBusy(true);
   setStatus("Загрузка исходного изображения…", "busy");
@@ -152,11 +189,14 @@ function processImage() {
   const settings = getSettings();
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
-  const worker = new Worker("./src/palette/block-palette-worker.js?v=block-palette-5");
+  const workerUrl = settings.algorithm === "webgl"
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-2"
+    : "./src/palette/block-palette-worker.js?v=block-palette-8";
+  const worker = new Worker(workerUrl);
 
   state.worker = worker;
   setStatus(
-    `Общая палитра ${settings.globalColorCount} · ${getPaletteFormatLabel(settings.paletteColorBits)} · ${getDiversityLabel()} · блок ${settings.blockSize}×${settings.blockSize} · ${settings.localColorCount} цвета на блок · ${getDitheringLabel(settings.dithering)}…`,
+    `${getAlgorithmLabel(settings.algorithm)} · общая палитра ${settings.globalColorCount} · ${getPaletteFormatLabel(settings.paletteColorBits)} · ${getDiversityLabel()} · блок ${settings.blockSize}×${settings.blockSize} · ${settings.localColorCount} цвета на блок · ${getDitheringLabel(settings.dithering)}…`,
     "busy"
   );
 
@@ -171,11 +211,11 @@ function processImage() {
       return;
     }
 
-    renderResult(event.data);
+    const fileLayout = renderResult(event.data);
     stopWorker();
     setBusy(false);
     setStatus(
-      `Готово: ${formatInteger(event.data.blockCount)} блоков, ${event.data.localIndexBits} бит/пиксель внутри блока, ${formatBytes(event.data.storage.totalBytes)} всего · ${getDiversityLabel()} · ${getDitheringLabel(event.data.dithering)}.`
+      `Готово: ${formatInteger(event.data.blockCount)} блоков, ${event.data.localIndexBits} бит/пиксель внутри блока, файл BPAL ${formatBytes(fileLayout.totalBytes)} · ${getAlgorithmLabel(event.data.algorithm)} · ${getDiversityLabel()} · ${getDitheringLabel(event.data.dithering)}${state.optimizationApplied ? " · подобрано автоматически" : ""}.`
     );
   });
 
@@ -197,6 +237,8 @@ function processImage() {
 function renderResult(result) {
   state.result = result;
   state.selectedBlock = 0;
+  const fileLayout = window.BlockPaletteFormat.getBlockPaletteFileLayout(result);
+
   resultCanvas.width = result.width;
   resultCanvas.height = result.height;
   resultCanvas.getContext("2d").putImageData(new ImageData(result.pixels, result.width, result.height), 0, 0);
@@ -204,24 +246,28 @@ function renderResult(result) {
   gridCanvas.height = result.height;
 
   metricBlocks.textContent = `${formatInteger(result.blocksX)} × ${formatInteger(result.blocksY)}`;
-  metricPayload.textContent = formatBytes(result.storage.totalBytes);
+  metricPayload.textContent = formatBytes(fileLayout.payloadBytes);
   metricBpp.textContent = result.storage.bitsPerPixel.toFixed(2);
   metricRatio.textContent = `${result.storage.compressionRatio.toFixed(2)}×`;
   metricError.textContent = Math.sqrt(result.meanSquaredError).toFixed(2);
-  processingTime.textContent = `${result.durationMs.toFixed(1)} мс · ${getColorSpaceLabel(result.colorSpace)}`;
+  processingTime.textContent = `${result.durationMs.toFixed(1)} мс · ${getColorSpaceLabel(result.colorSpace)} · ${getAlgorithmLabel(result.algorithm)}`;
 
-  storageGlobal.textContent = formatBytes(result.storage.globalPaletteBytes);
+  storageHeader.textContent = formatBytes(fileLayout.headerBytes);
+  storageHeaderFormula.textContent = `${window.BlockPaletteFormat.MAGIC} · v${window.BlockPaletteFormat.VERSION} · ${fileLayout.bitFieldHeaderBits} бит полей`;
+  storageGlobal.textContent = formatBitSize(result.storage.globalPaletteBits);
   storageGlobalFormula.textContent = `${result.globalColorCount} × ${result.paletteColorBits / 8} байта · ${getPaletteFormatLabel(result.paletteColorBits)}`;
-  storageBlocks.textContent = formatBytes(result.storage.blockPaletteBytes);
+  storageBlocks.textContent = formatBitSize(result.storage.blockPaletteBits);
   storageBlocksFormula.textContent = `${formatInteger(result.blockCount)} × ${result.localColorCount} × ${result.globalIndexBits} бит`;
-  storagePixels.textContent = formatBytes(result.storage.pixelDataBytes);
+  storagePixels.textContent = formatBitSize(result.storage.pixelDataBits);
   storagePixelsFormula.textContent = `${formatInteger(result.width * result.height)} × ${result.localIndexBits} бит`;
-  storageTotal.textContent = formatBytes(result.storage.totalBytes);
+  storageTotal.textContent = formatBytes(fileLayout.totalBytes);
+  storageTotalFormula.textContent = `${formatBitSize(fileLayout.payloadBits)} данных · ${fileLayout.paddingBits === 0 ? "без padding" : `${fileLayout.paddingBits} бит padding`}`;
   paletteSummary.textContent = `${result.activeGlobalColorCount} активных · ${result.resultColorCount} использовано · ${getPaletteFormatLabel(result.paletteColorBits)}`;
 
   globalPaletteElement.replaceChildren(...result.palette.map(createGlobalSwatch));
   renderSelectedBlock();
   drawGrid();
+  downloadFileButton.disabled = false;
   downloadButton.disabled = false;
 
   window.__blockPaletteResult = {
@@ -234,12 +280,18 @@ function renderResult(result) {
     localColorCount: result.localColorCount,
     globalColorCount: result.globalColorCount,
     paletteColorBits: result.paletteColorBits,
+    algorithm: result.algorithm,
+    acceleratedStages: result.acceleratedStages,
+    fallbackReason: result.fallbackReason || null,
     dithering: result.dithering,
     diversity: result.diversity,
     storage: result.storage,
     rmse: Math.sqrt(result.meanSquaredError),
     durationMs: result.durationMs,
+    file: fileLayout,
   };
+
+  return fileLayout;
 }
 
 function createGlobalSwatch(color, index) {
@@ -361,6 +413,7 @@ function getSettings() {
     globalColorCount: Number(globalColorCountSelect.value),
     paletteColorBits: Number(paletteColorBitsSelect.value),
     colorSpace: colorSpaceSelect.value,
+    algorithm: algorithmSelect.value,
     dithering: ditheringSelect.value,
     diversity: getDiversity(),
   };
@@ -368,14 +421,80 @@ function getSettings() {
 
 function updateCanvasDisplaySize(width, height) {
   const longestSide = Math.max(width, height);
-  const scale = longestSide < 512 ? Math.min(8, Math.floor(512 / longestSide)) : 1;
-  const displayWidth = `${width * scale}px`;
-  const displayHeight = `${height * scale}px`;
+  const preferredScale = longestSide < 512 ? Math.min(8, Math.floor(512 / longestSide)) : 1;
+  const viewportWidth = Math.min(sourceViewport.clientWidth, resultViewport.clientWidth);
+  const availableWidth = Math.max(1, viewportWidth - 28);
 
-  for (const canvas of [sourceCanvas, resultCanvas, gridCanvas]) {
-    canvas.style.width = displayWidth;
-    canvas.style.height = displayHeight;
+  state.imageWidth = width;
+  state.imageHeight = height;
+  state.displayBaseScale = Math.min(preferredScale, availableWidth / width);
+  state.zoom = 1;
+  applyCanvasDisplaySize();
+  sourceViewport.scrollTo(0, 0);
+  resultViewport.scrollTo(0, 0);
+}
+
+function applyCanvasDisplaySize() {
+  const displayScale = state.displayBaseScale * state.zoom;
+  const displayWidth = `${state.imageWidth * displayScale}px`;
+  const displayHeight = `${state.imageHeight * displayScale}px`;
+
+  for (const stage of [sourceStage, resultStage]) {
+    stage.style.width = displayWidth;
+    stage.style.height = displayHeight;
   }
+
+  zoomLevel.value = `${Math.round(state.zoom * 100)}%`;
+}
+
+function synchronizeScroll(source, target) {
+  if (state.synchronizingScroll) {
+    return;
+  }
+
+  state.synchronizingScroll = true;
+  const sourceRangeX = Math.max(0, source.scrollWidth - source.clientWidth);
+  const sourceRangeY = Math.max(0, source.scrollHeight - source.clientHeight);
+  const targetRangeX = Math.max(0, target.scrollWidth - target.clientWidth);
+  const targetRangeY = Math.max(0, target.scrollHeight - target.clientHeight);
+
+  target.scrollLeft = sourceRangeX > 0 ? source.scrollLeft / sourceRangeX * targetRangeX : 0;
+  target.scrollTop = sourceRangeY > 0 ? source.scrollTop / sourceRangeY * targetRangeY : 0;
+  window.requestAnimationFrame(() => {
+    state.synchronizingScroll = false;
+  });
+}
+
+function zoomFromWheel(event) {
+  if (!event.ctrlKey || !state.imageWidth || !state.imageHeight) {
+    return;
+  }
+
+  event.preventDefault();
+  const viewport = event.currentTarget;
+  const otherViewport = viewport === sourceViewport ? resultViewport : sourceViewport;
+  const bounds = viewport.getBoundingClientRect();
+  const pointerX = event.clientX - bounds.left;
+  const pointerY = event.clientY - bounds.top;
+  const anchorX = (viewport.scrollLeft + pointerX) / Math.max(1, viewport.scrollWidth);
+  const anchorY = (viewport.scrollTop + pointerY) / Math.max(1, viewport.scrollHeight);
+  const pixelDelta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? event.deltaY * 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? event.deltaY * viewport.clientHeight
+      : event.deltaY;
+  const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, state.zoom * Math.exp(-pixelDelta * 0.002)));
+
+  if (Math.abs(nextZoom - state.zoom) < 0.0001) {
+    return;
+  }
+
+  state.zoom = nextZoom;
+  applyCanvasDisplaySize();
+  viewport.scrollLeft = anchorX * viewport.scrollWidth - pointerX;
+  viewport.scrollTop = anchorY * viewport.scrollHeight - pointerY;
+  state.synchronizingScroll = false;
+  synchronizeScroll(viewport, otherViewport);
 }
 
 function downloadResult() {
@@ -390,16 +509,143 @@ function downloadResult() {
     }
 
     const settings = getSettings();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = url;
     const ditherSuffix = settings.dithering === "none" ? "" : `-${settings.dithering}`;
 
-    link.download = `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${ditherSuffix}.png`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadBlob(
+      blob,
+      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${ditherSuffix}.png`
+    );
   }, "image/png");
+}
+
+function downloadBlockPaletteFile() {
+  if (!state.result || downloadFileButton.disabled) {
+    return;
+  }
+
+  try {
+    const settings = getSettings();
+    const bytes = window.BlockPaletteFormat.encodeBlockPaletteFile(state.result);
+    const blob = new Blob([bytes], { type: "application/vnd.block-palette" });
+
+    downloadBlob(
+      blob,
+      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit.bpal`
+    );
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function optimizeSettings() {
+  if (!state.sourceImageData || state.optimizerWorker) {
+    return;
+  }
+
+  stopWorker();
+  stopOptimizer();
+  setBusy(true);
+  optimizeButton.textContent = "Подбор 0/20";
+  setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
+
+  const preview = createOptimizationPreview();
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-1");
+
+  state.optimizerWorker = worker;
+
+  worker.addEventListener("message", (event) => {
+    if (worker !== state.optimizerWorker) {
+      return;
+    }
+
+    if (event.data.type === "progress") {
+      const { completed, total, candidate } = event.data;
+
+      optimizeButton.textContent = `Подбор ${completed}/${total}`;
+      setStatus(
+        `Ищу настройки: ${completed}/${total} · пробный BPAL ${formatBytes(candidate.fileBytes)} · RMSE ${candidate.rmse.toFixed(2)}…`,
+        "busy"
+      );
+      return;
+    }
+
+    if (event.data.type === "error") {
+      stopOptimizer();
+      showError(new Error(event.data.error));
+      return;
+    }
+
+    if (event.data.type === "result") {
+      const { settings, selected, frontier } = event.data.result;
+
+      blockSizeSelect.value = String(settings.blockSize);
+      localColorCountSelect.value = String(settings.localColorCount);
+      globalColorCountSelect.value = String(settings.globalColorCount);
+      paletteColorBitsSelect.value = String(settings.paletteColorBits);
+      state.optimizationApplied = true;
+      stopOptimizer();
+      setBusy(false);
+      setStatus(
+        `Найден баланс среди ${frontier.length} вариантов Парето: пробный BPAL ${formatBytes(selected.fileBytes)}, RMSE ${selected.rmse.toFixed(2)}. Выполняю полное сжатие…`,
+        "busy"
+      );
+      processImage();
+    }
+  });
+
+  worker.addEventListener("error", (event) => {
+    if (worker === state.optimizerWorker) {
+      stopOptimizer();
+      showError(new Error(event.message || "Ошибка подбора настроек"));
+    }
+  });
+
+  worker.postMessage({
+    pixels: preview.data.buffer,
+    width: preview.width,
+    height: preview.height,
+    options: {
+      colorSpace: colorSpaceSelect.value,
+      dithering: ditheringSelect.value,
+      diversity: getDiversity(),
+    },
+  }, [preview.data.buffer]);
+}
+
+function createOptimizationPreview() {
+  const maximumSide = 96;
+  const sourceWidth = state.sourceImageData.width;
+  const sourceHeight = state.sourceImageData.height;
+  const scale = Math.min(1, maximumSide / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+
+  if (width === sourceWidth && height === sourceHeight) {
+    return new ImageData(new Uint8ClampedArray(state.sourceImageData.data), width, height);
+  }
+
+  const canvas = document.createElement("canvas");
+
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(sourceCanvas, 0, 0, width, height);
+
+  return context.getImageData(0, 0, width, height);
 }
 
 function stopWorker() {
@@ -437,18 +683,21 @@ function resetResultMetrics() {
   gridCanvas.width = 0;
   gridCanvas.height = 0;
 
-  for (const element of [metricBlocks, metricPayload, metricBpp, metricRatio, metricError, storageGlobal, storageBlocks, storagePixels, storageTotal]) {
+  for (const element of [metricBlocks, metricPayload, metricBpp, metricRatio, metricError, storageHeader, storageGlobal, storageBlocks, storagePixels, storageTotal]) {
     element.textContent = "—";
   }
 
+  storageHeaderFormula.textContent = "—";
   storageGlobalFormula.textContent = "—";
   storageBlocksFormula.textContent = "—";
   storagePixelsFormula.textContent = "—";
+  storageTotalFormula.textContent = "—";
   processingTime.textContent = "";
   blockLabel.textContent = "—";
   paletteSummary.textContent = "—";
   blockPaletteElement.replaceChildren();
   globalPaletteElement.replaceChildren();
+  downloadFileButton.disabled = true;
   downloadButton.disabled = true;
   delete window.__blockPaletteResult;
 }
@@ -461,6 +710,7 @@ function showError(error) {
 
 function setBusy(busy) {
   processButton.disabled = busy;
+  optimizeButton.disabled = busy;
   imageSelect.disabled = busy;
   uploadButton.disabled = busy;
   blockSizeSelect.disabled = busy;
@@ -468,6 +718,7 @@ function setBusy(busy) {
   globalColorCountSelect.disabled = busy;
   paletteColorBitsSelect.disabled = busy;
   colorSpaceSelect.disabled = busy;
+  algorithmSelect.disabled = busy;
   diversityInput.disabled = busy;
   ditheringSelect.disabled = busy;
 }
@@ -494,12 +745,34 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} МиБ`;
 }
 
+function formatBitSize(bits) {
+  return bits % 8 === 0 ? formatBytes(bits / 8) : `${formatInteger(bits)} бит`;
+}
+
 function formatPaletteIndex(index, bits) {
-  return bits === 8 ? index.toString(16).padStart(2, "0").toUpperCase() : String(index);
+  return bits >= 8
+    ? index.toString(16).padStart(Math.ceil(bits / 4), "0").toUpperCase()
+    : String(index);
 }
 
 function getColorSpaceLabel(value) {
   return value === "rgb" ? "RGB" : "OKLab";
+}
+
+function getAlgorithmLabel(value) {
+  if (value === "webgl") {
+    return "WebGL2";
+  }
+
+  if (value === "webgl-hybrid") {
+    return "WebGL2 + CPU Floyd";
+  }
+
+  if (value === "cpu-fallback") {
+    return "WebGL2 → CPU";
+  }
+
+  return "CPU";
 }
 
 function getPaletteFormatLabel(bits) {
@@ -517,6 +790,15 @@ function getDitheringLabel(mode) {
     default:
       return "без дизеринга";
   }
+}
+
+function stopOptimizer() {
+  if (state.optimizerWorker) {
+    state.optimizerWorker.terminate();
+    state.optimizerWorker = null;
+  }
+
+  optimizeButton.textContent = "Подобрать настройки";
 }
 
 function getDiversityLevel() {

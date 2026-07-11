@@ -50,11 +50,14 @@
           <label>
             Общая палитра
             <select id="global-color-count" name="globalColorCount">
+              <option value="8">8 цветов · 3 бита</option>
               <option value="16">16 цветов · 4 бита</option>
               <option value="32">32 цвета · 5 бит</option>
               <option value="64">64 цвета · 6 бит</option>
               <option value="128">128 цветов · 7 бит</option>
               <option value="256" selected>256 цветов · 8 бит</option>
+              <option value="512">512 цветов · 9 бит</option>
+              <option value="1024">1024 цвета · 10 бит</option>
             </select>
           </label>
 
@@ -71,6 +74,14 @@
             <select id="color-space" name="colorSpace">
               <option value="oklab" selected>OKLab</option>
               <option value="rgb">RGB</option>
+            </select>
+          </label>
+
+          <label>
+            Алгоритм
+            <select id="algorithm" name="algorithm">
+              <option value="cpu" selected>CPU</option>
+              <option value="webgl">WebGL2</option>
             </select>
           </label>
 
@@ -96,6 +107,8 @@
           <button id="upload-button" type="button">Загрузить изображение</button>
           <input id="image-file" type="file" accept="image/*" hidden>
           <button id="process-button" type="submit">Сжать</button>
+          <button id="optimize-button" type="button" title="Найти баланс качества и размера файла">Подобрать настройки</button>
+          <button id="download-file-button" type="button" disabled>Скачать BPAL</button>
           <button id="download-button" type="button" disabled>Скачать PNG</button>
         </form>
       </header>
@@ -115,33 +128,42 @@
         <div class="section-heading">
           <div>
             <h2 id="storage-title">Что хранится</h2>
-            <p>Теоретический плотно упакованный поток без заголовка и отдельного альфа-канала.</p>
+            <p>Единый битовый поток BPAL без выравнивания секций и отдельного альфа-канала.</p>
           </div>
           <span id="processing-time"></span>
         </div>
         <div class="storage-flow">
+          <div><span>Заголовок BPAL</span><strong id="storage-header">—</strong><small id="storage-header-formula">—</small></div>
+          <b>+</b>
           <div><span>Общая RGB-палитра</span><strong id="storage-global">—</strong><small id="storage-global-formula">—</small></div>
           <b>+</b>
           <div><span>Палитры блоков</span><strong id="storage-blocks">—</strong><small id="storage-blocks-formula">—</small></div>
           <b>+</b>
           <div><span>Пиксели блоков</span><strong id="storage-pixels">—</strong><small id="storage-pixels-formula">—</small></div>
           <b>=</b>
-          <div class="storage-total"><span>Итого</span><strong id="storage-total">—</strong><small>без служебного заголовка</small></div>
+          <div class="storage-total"><span>Файл BPAL</span><strong id="storage-total">—</strong><small id="storage-total-formula">—</small></div>
         </div>
       </section>
 
       <section class="comparison" aria-label="Сравнение изображений">
         <figure>
           <figcaption>Исходное изображение</figcaption>
-          <div class="canvas-viewport"><canvas id="source-canvas"></canvas></div>
+          <div id="source-viewport" class="canvas-viewport">
+            <span id="source-stage" class="canvas-stage">
+              <canvas id="source-canvas"></canvas>
+            </span>
+          </div>
         </figure>
         <figure>
           <figcaption class="result-caption">
             <span>Восстановленное изображение</span>
-            <label><input id="show-grid" type="checkbox" checked> Сетка блоков</label>
+            <span class="result-caption-controls">
+              <output id="zoom-level" title="Ctrl + колесо для изменения масштаба">100%</output>
+              <label><input id="show-grid" type="checkbox" checked> Сетка блоков</label>
+            </span>
           </figcaption>
-          <div class="canvas-viewport">
-            <span class="result-stage">
+          <div id="result-viewport" class="canvas-viewport">
+            <span id="result-stage" class="canvas-stage result-stage">
               <canvas id="result-canvas" aria-label="Результат; нажмите на блок, чтобы увидеть его палитру"></canvas>
               <canvas id="grid-canvas" aria-hidden="true"></canvas>
             </span>
@@ -172,6 +194,7 @@
       </section>
     </main>
 
-    <script src="./src/pages/block-palette-page.js?v=block-palette-5"></script>
+    <script src="./src/palette/block-palette-format.js?v=block-palette-1"></script>
+    <script src="./src/pages/block-palette-page.js?v=block-palette-9"></script>
   </body>
 </html>

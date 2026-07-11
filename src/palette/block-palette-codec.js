@@ -37,6 +37,7 @@
     const colorSpace = options.colorSpace || "oklab";
     const dithering = options.dithering || "none";
     const diversity = options.diversity === undefined ? 0 : Number(options.diversity);
+    const accelerator = options.accelerator || null;
 
     validateInput(
       sourcePixels,
@@ -67,37 +68,76 @@
     const paletteDistances = createPaletteDistanceMatrix(palettePoints);
     const sourcePointByColor = new Map();
     const globalIndexByColor = new Map();
-    const globalAssignments = new Uint16Array(width * height);
-    const globalUsage = new Uint32Array(globalColorCount);
+    let globalAssignments;
+    let uniqueColorCount;
 
-    for (let pixel = 0; pixel < width * height; pixel += 1) {
-      const offset = pixel * 4;
+    if (accelerator && typeof accelerator.mapGlobalAssignments === "function") {
+      globalAssignments = accelerator.mapGlobalAssignments({
+        sourcePixels,
+        width,
+        height,
+        palette: activePalette,
+        colorSpace,
+      });
 
-      if (sourcePixels[offset + 3] === 0) {
-        continue;
+      if (!(globalAssignments instanceof Uint16Array) || globalAssignments.length !== width * height) {
+        throw new TypeError("Accelerated global assignments have an invalid format");
       }
 
-      const key = colorKey(sourcePixels[offset], sourcePixels[offset + 1], sourcePixels[offset + 2]);
-      let globalIndex = globalIndexByColor.get(key);
+      const uniqueColors = new Set();
 
-      if (globalIndex === undefined) {
-        const point = colorPoint(sourcePixels[offset], sourcePixels[offset + 1], sourcePixels[offset + 2], colorSpace);
+      for (let pixel = 0; pixel < width * height; pixel += 1) {
+        const offset = pixel * 4;
 
-        sourcePointByColor.set(key, point);
-        globalIndex = nearestPointIndex(point, palettePoints);
-        globalIndexByColor.set(key, globalIndex);
+        if (sourcePixels[offset + 3] === 0) {
+          continue;
+        }
+
+        if (globalAssignments[pixel] >= activePalette.length) {
+          throw new RangeError("Accelerated global assignment is outside the active palette");
+        }
+
+        uniqueColors.add(colorKey(
+          sourcePixels[offset],
+          sourcePixels[offset + 1],
+          sourcePixels[offset + 2]
+        ));
       }
 
-      globalAssignments[pixel] = globalIndex;
-      globalUsage[globalIndex] += 1;
+      uniqueColorCount = uniqueColors.size;
+    } else {
+      globalAssignments = new Uint16Array(width * height);
+
+      for (let pixel = 0; pixel < width * height; pixel += 1) {
+        const offset = pixel * 4;
+
+        if (sourcePixels[offset + 3] === 0) {
+          continue;
+        }
+
+        const key = colorKey(sourcePixels[offset], sourcePixels[offset + 1], sourcePixels[offset + 2]);
+        let globalIndex = globalIndexByColor.get(key);
+
+        if (globalIndex === undefined) {
+          const point = colorPoint(sourcePixels[offset], sourcePixels[offset + 1], sourcePixels[offset + 2], colorSpace);
+
+          sourcePointByColor.set(key, point);
+          globalIndex = nearestPointIndex(point, palettePoints);
+          globalIndexByColor.set(key, globalIndex);
+        }
+
+        globalAssignments[pixel] = globalIndex;
+      }
+
+      uniqueColorCount = globalIndexByColor.size;
     }
 
     const blocksX = Math.ceil(width / blockSize);
     const blocksY = Math.ceil(height / blockSize);
     const blockCount = blocksX * blocksY;
     const blockPaletteIndices = new Uint16Array(blockCount * localColorCount);
-    const pixelIndices = new Uint8Array(width * height);
-    const outputPixels = new Uint8ClampedArray(sourcePixels.length);
+    let pixelIndices = new Uint8Array(width * height);
+    let outputPixels = new Uint8ClampedArray(sourcePixels.length);
     const resultUsage = new Uint32Array(globalColorCount);
 
     for (let blockY = 0; blockY < blocksY; blockY += 1) {
@@ -123,8 +163,61 @@
       }
     }
 
-    if (dithering === "floyd-steinberg") {
-      applyFloydSteinbergDithering(
+    if (
+      dithering !== "floyd-steinberg" &&
+      accelerator &&
+      typeof accelerator.encodeBlocks === "function"
+    ) {
+      const encoded = accelerator.encodeBlocks({
+        sourcePixels,
+        width,
+        height,
+        blockSize,
+        blocksX,
+        blocksY,
+        localColorCount,
+        blockPaletteIndices,
+        palette,
+        colorSpace,
+        dithering,
+      });
+
+      if (
+        !encoded ||
+        !(encoded.pixels instanceof Uint8ClampedArray) ||
+        encoded.pixels.length !== sourcePixels.length ||
+        !(encoded.pixelIndices instanceof Uint8Array) ||
+        encoded.pixelIndices.length !== width * height
+      ) {
+        throw new TypeError("Accelerated block encoding has an invalid format");
+      }
+
+      outputPixels = encoded.pixels;
+      pixelIndices = encoded.pixelIndices;
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const pixel = y * width + x;
+          const offset = pixel * 4;
+
+          if (sourcePixels[offset + 3] === 0) {
+            continue;
+          }
+
+          const localIndex = pixelIndices[pixel];
+
+          if (localIndex >= localColorCount) {
+            throw new RangeError("Accelerated local index is outside the block palette");
+          }
+
+          const blockIndex = Math.floor(y / blockSize) * blocksX + Math.floor(x / blockSize);
+          const globalIndex = blockPaletteIndices[blockIndex * localColorCount + localIndex];
+
+          resultUsage[globalIndex] += 1;
+        }
+      }
+    } else if (dithering === "floyd-steinberg") {
+      applyBlockFloydSteinbergDithering(
         sourcePixels,
         outputPixels,
         pixelIndices,
@@ -176,10 +269,14 @@
 
     const globalIndexBits = Math.log2(globalColorCount);
     const localIndexBits = Math.log2(localColorCount);
-    const globalPaletteBytes = globalColorCount * paletteColorBits / 8;
-    const blockPaletteBytes = Math.ceil(blockCount * localColorCount * globalIndexBits / 8);
-    const pixelDataBytes = Math.ceil(width * height * localIndexBits / 8);
-    const totalBytes = globalPaletteBytes + blockPaletteBytes + pixelDataBytes;
+    const globalPaletteBits = globalColorCount * paletteColorBits;
+    const blockPaletteBits = blockCount * localColorCount * globalIndexBits;
+    const pixelDataBits = width * height * localIndexBits;
+    const payloadBits = globalPaletteBits + blockPaletteBits + pixelDataBits;
+    const globalPaletteBytes = Math.ceil(globalPaletteBits / 8);
+    const blockPaletteBytes = Math.ceil(blockPaletteBits / 8);
+    const pixelDataBytes = Math.ceil(pixelDataBits / 8);
+    const totalBytes = Math.ceil(payloadBits / 8);
     const rawRgbBytes = width * height * 3;
 
     return {
@@ -199,7 +296,7 @@
       activeGlobalColorCount: activePalette.length,
       globalIndexBits,
       localIndexBits,
-      uniqueColorCount: globalIndexByColor.size,
+      uniqueColorCount,
       resultColorCount: countNonZero(resultUsage),
       meanSquaredError: meanSquaredError(sourcePixels, outputPixels),
       colorSpace,
@@ -207,13 +304,17 @@
       diversity,
       iterations: quantizedSample.iterations,
       storage: {
+        globalPaletteBits,
+        blockPaletteBits,
+        pixelDataBits,
+        payloadBits,
         globalPaletteBytes,
         blockPaletteBytes,
         pixelDataBytes,
         totalBytes,
         rawRgbBytes,
-        bitsPerPixel: totalBytes * 8 / (width * height),
-        compressionRatio: rawRgbBytes / totalBytes,
+        bitsPerPixel: payloadBits / (width * height),
+        compressionRatio: rawRgbBytes * 8 / payloadBits,
       },
     };
   }
@@ -535,7 +636,7 @@
     }
   }
 
-  function applyFloydSteinbergDithering(
+  function applyBlockFloydSteinbergDithering(
     sourcePixels,
     outputPixels,
     pixelIndices,
@@ -550,59 +651,70 @@
     palettePoints,
     colorSpace
   ) {
-    const rowLength = (width + 2) * 3;
+    const rowLength = (blockSize + 2) * 3;
     let currentErrors = new Float32Array(rowLength);
     let nextErrors = new Float32Array(rowLength);
 
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const pixel = y * width + x;
-        const offset = pixel * 4;
-        const alpha = sourcePixels[offset + 3];
-        const errorOffset = (x + 1) * 3;
+    for (let startY = 0; startY < height; startY += blockSize) {
+      const endY = Math.min(height, startY + blockSize);
+      const blockY = Math.floor(startY / blockSize);
 
-        if (alpha === 0) {
-          outputPixels[offset] = sourcePixels[offset];
-          outputPixels[offset + 1] = sourcePixels[offset + 1];
-          outputPixels[offset + 2] = sourcePixels[offset + 2];
-          outputPixels[offset + 3] = 0;
-          continue;
-        }
-
-        const correctedRed = clampByte(sourcePixels[offset] + currentErrors[errorOffset]);
-        const correctedGreen = clampByte(sourcePixels[offset + 1] + currentErrors[errorOffset + 1]);
-        const correctedBlue = clampByte(sourcePixels[offset + 2] + currentErrors[errorOffset + 2]);
-        const point = colorPoint(correctedRed, correctedGreen, correctedBlue, colorSpace);
-        const blockX = Math.floor(x / blockSize);
-        const blockY = Math.floor(y / blockSize);
+      for (let startX = 0; startX < width; startX += blockSize) {
+        const endX = Math.min(width, startX + blockSize);
+        const blockX = Math.floor(startX / blockSize);
         const paletteOffset = (blockY * blocksX + blockX) * localColorCount;
-        const localIndex = nearestBlockPaletteIndex(
-          point,
-          paletteOffset,
-          localColorCount,
-          blockPaletteIndices,
-          palettePoints
-        );
-        const globalIndex = blockPaletteIndices[paletteOffset + localIndex];
-        const color = palette[globalIndex];
 
-        pixelIndices[pixel] = localIndex;
-        outputPixels[offset] = color.r;
-        outputPixels[offset + 1] = color.g;
-        outputPixels[offset + 2] = color.b;
-        outputPixels[offset + 3] = alpha;
-        resultUsage[globalIndex] += 1;
+        currentErrors.fill(0);
+        nextErrors.fill(0);
 
-        diffuseError(correctedRed - color.r, 0, errorOffset, currentErrors, nextErrors);
-        diffuseError(correctedGreen - color.g, 1, errorOffset, currentErrors, nextErrors);
-        diffuseError(correctedBlue - color.b, 2, errorOffset, currentErrors, nextErrors);
+        for (let y = startY; y < endY; y += 1) {
+          for (let x = startX; x < endX; x += 1) {
+            const pixel = y * width + x;
+            const offset = pixel * 4;
+            const alpha = sourcePixels[offset + 3];
+            const errorOffset = (x - startX + 1) * 3;
+
+            if (alpha === 0) {
+              outputPixels[offset] = sourcePixels[offset];
+              outputPixels[offset + 1] = sourcePixels[offset + 1];
+              outputPixels[offset + 2] = sourcePixels[offset + 2];
+              outputPixels[offset + 3] = 0;
+              continue;
+            }
+
+            const correctedRed = clampByte(sourcePixels[offset] + currentErrors[errorOffset]);
+            const correctedGreen = clampByte(sourcePixels[offset + 1] + currentErrors[errorOffset + 1]);
+            const correctedBlue = clampByte(sourcePixels[offset + 2] + currentErrors[errorOffset + 2]);
+            const point = colorPoint(correctedRed, correctedGreen, correctedBlue, colorSpace);
+            const localIndex = nearestBlockPaletteIndex(
+              point,
+              paletteOffset,
+              localColorCount,
+              blockPaletteIndices,
+              palettePoints
+            );
+            const globalIndex = blockPaletteIndices[paletteOffset + localIndex];
+            const color = palette[globalIndex];
+
+            pixelIndices[pixel] = localIndex;
+            outputPixels[offset] = color.r;
+            outputPixels[offset + 1] = color.g;
+            outputPixels[offset + 2] = color.b;
+            outputPixels[offset + 3] = alpha;
+            resultUsage[globalIndex] += 1;
+
+            diffuseError(correctedRed - color.r, 0, errorOffset, currentErrors, nextErrors);
+            diffuseError(correctedGreen - color.g, 1, errorOffset, currentErrors, nextErrors);
+            diffuseError(correctedBlue - color.b, 2, errorOffset, currentErrors, nextErrors);
+          }
+
+          const previousErrors = currentErrors;
+
+          currentErrors = nextErrors;
+          nextErrors = previousErrors;
+          nextErrors.fill(0);
+        }
       }
-
-      const previousErrors = currentErrors;
-
-      currentErrors = nextErrors;
-      nextErrors = previousErrors;
-      nextErrors.fill(0);
     }
   }
 
@@ -813,8 +925,8 @@
       throw new RangeError("blockSize must be a power of two from 2 to 64");
     }
 
-    if (!isPowerOfTwo(globalColorCount) || globalColorCount < 2 || globalColorCount > 256) {
-      throw new RangeError("globalColorCount must be a power of two from 2 to 256");
+    if (!isPowerOfTwo(globalColorCount) || globalColorCount < 2 || globalColorCount > 1024) {
+      throw new RangeError("globalColorCount must be a power of two from 2 to 1024");
     }
 
     if (paletteColorBits !== 16 && paletteColorBits !== 24) {

@@ -2,21 +2,20 @@
 
 importScripts("./palette-quantizer.js?v=src-layout-1");
 importScripts("./block-palette-codec.js?v=block-palette-8");
+importScripts("./block-palette-webgl-codec.js?v=block-palette-2");
 
 self.addEventListener("message", (event) => {
   const { pixels, width, height, settings } = event.data;
   const startedAt = performance.now();
 
   try {
-    const result = self.BlockPaletteCodec.compressImage(
+    const result = self.BlockPaletteWebGLCodec.compressImageWebGL(
       new Uint8ClampedArray(pixels),
       width,
       height,
       settings
     );
 
-    result.algorithm = "cpu";
-    result.acceleratedStages = [];
     result.durationMs = performance.now() - startedAt;
     self.postMessage(result, [
       result.pixels.buffer,

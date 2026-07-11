@@ -44,6 +44,35 @@ test("calculates the tightly packed 256-color, four-color block layout", () => {
   assert.equal(result.storage.totalBytes, 788);
 });
 
+test("supports 512-color and 1024-color common palettes", () => {
+  const source = new Uint8ClampedArray(8 * 8 * 4);
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    source[offset + 3] = 255;
+  }
+
+  const palette512 = compressImage(source, 8, 8, {
+    blockSize: 8,
+    localColorCount: 4,
+    globalColorCount: 512,
+  });
+  const palette1024 = compressImage(source, 8, 8, {
+    blockSize: 8,
+    localColorCount: 4,
+    globalColorCount: 1024,
+  });
+
+  assert.equal(palette512.globalIndexBits, 9);
+  assert.equal(palette512.storage.globalPaletteBytes, 1536);
+  assert.equal(palette512.storage.blockPaletteBytes, 5);
+  assert.equal(palette512.storage.totalBytes, 1557);
+  assert.equal(palette1024.globalIndexBits, 10);
+  assert.equal(palette1024.storage.globalPaletteBytes, 3072);
+  assert.equal(palette1024.storage.blockPaletteBytes, 5);
+  assert.equal(palette1024.storage.totalBytes, 3093);
+  assert.ok(Array.from(palette1024.blockPaletteIndices).every((index) => index < 1024));
+});
+
 test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () => {
   const source = pixels([
     [123, 201, 77, 255], [123, 201, 77, 255],
@@ -61,7 +90,8 @@ test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () =
   assert.deepEqual(Array.from(result.pixels.slice(0, 4)), [123, 202, 74, 255]);
   assert.equal(result.palette[0].hex, "#7bca4a");
   assert.equal(result.storage.globalPaletteBytes, 8);
-  assert.equal(result.storage.totalBytes, 10);
+  assert.equal(result.storage.payloadBits, 72);
+  assert.equal(result.storage.totalBytes, 9);
 });
 
 test("uses only local indices and global palette references that fit the format", () => {
@@ -162,6 +192,61 @@ test("supports Bayer and Floyd-Steinberg dithering inside block palettes", () =>
   assert.ok(Array.from(floyd.pixelIndices).every((index) => index < settings.localColorCount));
 });
 
+test("does not diffuse Floyd-Steinberg error across block palette boundaries", () => {
+  const leftA = [
+    [0, 255, 0, 128],
+    [255, 0, 255, 0],
+    [128, 255, 128, 0],
+    [255, 0, 255, 128],
+  ];
+  const leftB = [
+    [128, 255, 0, 0],
+    [255, 0, 255, 0],
+    [128, 255, 128, 0],
+    [255, 0, 255, 128],
+  ];
+  const right = [
+    [128, 0, 255, 0],
+    [255, 0, 255, 128],
+    [0, 255, 128, 255],
+    [0, 255, 0, 255],
+  ];
+  const compress = (left) => {
+    const values = [];
+
+    for (let y = 0; y < 4; y += 1) {
+      for (const value of [...left[y], ...right[y]]) {
+        values.push([value, value, value, 255]);
+      }
+    }
+
+    return compressImage(pixels(values), 8, 4, {
+      blockSize: 4,
+      localColorCount: 2,
+      globalColorCount: 4,
+      colorSpace: "rgb",
+      dithering: "floyd-steinberg",
+    });
+  };
+  const resultA = compress(leftA);
+  const resultB = compress(leftB);
+  const rightBlockIndices = (result) => {
+    const indices = [];
+
+    for (let y = 0; y < 4; y += 1) {
+      indices.push(...result.pixelIndices.slice(y * 8 + 4, y * 8 + 8));
+    }
+
+    return indices;
+  };
+
+  assert.deepEqual(
+    Array.from(resultA.blockPaletteIndices.slice(2, 4)),
+    Array.from(resultB.blockPaletteIndices.slice(2, 4))
+  );
+  assert.deepEqual(rightBlockIndices(resultA), rightBlockIndices(resultB));
+});
+
 test("diversity weighting gives rare colors more influence in the common palette", () => {
   const values = [];
 
@@ -201,6 +286,10 @@ test("rejects non-power-of-two format settings", () => {
   assert.throws(
     () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 3, globalColorCount: 4 }),
     /localColorCount must be a power of two/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, { blockSize: 2, localColorCount: 2, globalColorCount: 2048 }),
+    /globalColorCount must be a power of two from 2 to 1024/
   );
   assert.throws(
     () => compressImage(source, 2, 2, {

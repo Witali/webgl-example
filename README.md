@@ -1,5 +1,7 @@
 # WebGL Image Decode Demo
 
+**[Open the live demo on GitHub Pages](https://witali.github.io/webgl-example/)**
+
 A WebGL image decoding demo that renders a textured rotating cube and
 experiments with custom JPEG/WebP decoding paths. It includes GPU-assisted JPEG
 decoding, WASM JPEG/WebP decoders, visual comparison against the browser
