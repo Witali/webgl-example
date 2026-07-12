@@ -59,7 +59,7 @@ test("removes settings dominated by both file size and error", () => {
   assert.deepEqual(frontier, [smaller, best]);
 });
 
-test("optimizes using OKLab vector-palette storage and the BPAL v3 header", () => {
+test("optimizes using explicit-palette storage and the BPAL v3 header", () => {
   const source = new Uint8ClampedArray([
     0, 0, 0, 255, 85, 85, 85, 255,
     170, 170, 170, 255, 255, 255, 255, 255,
@@ -73,15 +73,12 @@ test("optimizes using OKLab vector-palette storage and the BPAL v3 header", () =
   const options = {
     profiles: [profile],
     colorSpace: "rgb",
-    paletteMode: "vector",
-    vectorColorSpace: "oklab",
-    vectorDeviation: 0.02,
   };
   const optimized = findBalancedBlockPaletteSettings(source, 2, 2, options);
   const compressed = compressImage(source, 2, 2, { ...profile, ...options });
 
-  assert.equal(compressed.paletteVectorCount, 1);
-  assert.equal(compressed.vectorColorSpace, "oklab");
+  assert.equal(compressed.paletteMode, "explicit");
+  assert.equal(compressed.storage.globalPaletteBits, 8 * 24);
   assert.equal(optimized.selected.fileBytes, compressed.storage.totalBytes + 14);
 });
 

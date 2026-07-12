@@ -72,93 +72,37 @@ test("packs adjacent BPAL payload sections without byte alignment", () => {
   assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
 });
 
-test("stores vector endpoints and reconstructs the preview palette", () => {
-  const values = [];
-
-  for (let y = 0; y < 8; y += 1) {
-    for (let x = 0; x < 8; x += 1) {
-      values.push([x * 36, y * 36, (x * y % 8) * 36, 255]);
-    }
-  }
-
-  const result = compressImage(pixels(values), 8, 8, {
-    blockSize: 4,
-    localColorCount: 4,
-    globalColorCount: 32,
-    paletteColorBits: 24,
-    paletteMode: "vector",
-    vectorColorSpace: "rgb",
-    vectorDeviation: 0.05,
-    colorSpace: "rgb",
-  });
-  const layout = getBlockPaletteFileLayout(result);
-  const encoded = encodeBlockPaletteFile(result);
+test("continues to reconstruct legacy RGB-vector palettes", () => {
+  const image = createLegacyVectorImage("rgb");
+  const layout = getBlockPaletteFileLayout(image);
+  const encoded = encodeBlockPaletteFile(image);
   const decoded = decodeBlockPaletteFile(encoded);
 
   assert.equal(decoded.paletteMode, "vector");
   assert.equal(decoded.vectorColorSpace, "rgb");
-  assert.equal(decoded.paletteVectorCount, result.paletteVectorCount);
-  assert.equal(decoded.paletteVectors.length, result.paletteVectorCount);
-  assert.equal(layout.globalPaletteBits, result.paletteVectorCount * 2 * 24);
-  assert.deepEqual(decoded.paletteVectors, result.paletteVectors.map((vector) => ({
-    start: colorWithoutCodecFields(vector.start),
-    end: colorWithoutCodecFields(vector.end),
-  })));
-  assert.deepEqual(
-    decoded.palette.map((color) => color.hex),
-    result.palette.map((color) => color.hex)
-  );
-  assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+  assert.equal(decoded.paletteVectorCount, 1);
+  assert.deepEqual(decoded.paletteVectors, image.paletteVectors);
+  assert.equal(layout.globalPaletteBits, 2 * 24);
+  assert.deepEqual(Array.from(decoded.pixels), [
+    0, 0, 0, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 0, 0, 0, 255,
+  ]);
 });
 
-test("stores and reconstructs OKLab vector palettes in BPAL v3", () => {
-  const values = [];
-
-  for (let y = 0; y < 8; y += 1) {
-    for (let x = 0; x < 8; x += 1) {
-      values.push([x * 36, y * 36, (7 - x) * 36, 255]);
-    }
-  }
-
-  const result = compressImage(pixels(values), 8, 8, {
-    blockSize: 4,
-    localColorCount: 4,
-    globalColorCount: 32,
-    paletteColorBits: 24,
-    paletteMode: "vector",
-    vectorColorSpace: "oklab",
-    vectorDeviation: 0.02,
-    colorSpace: "oklab",
-  });
-  const decoded = decodeBlockPaletteFile(encodeBlockPaletteFile(result));
+test("continues to reconstruct legacy OKLab-vector palettes in BPAL v3", () => {
+  const image = createLegacyVectorImage("oklab");
+  const decoded = decodeBlockPaletteFile(encodeBlockPaletteFile(image));
 
   assert.equal(decoded.version, 3);
   assert.equal(decoded.paletteMode, "vector");
   assert.equal(decoded.vectorColorSpace, "oklab");
-  assert.deepEqual(
-    decoded.palette.map((color) => color.hex),
-    result.palette.map((color) => color.hex)
-  );
-  assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+  assert.deepEqual(decoded.paletteVectors, image.paletteVectors);
+  assert.equal(decoded.palette.length, image.globalColorCount);
 });
 
 test("continues to decode legacy RGB-vector BPAL v2 files", () => {
-  const values = Array.from({ length: 16 }, (_, index) => {
-    const channel = index * 17;
-
-    return [channel, channel, channel, 255];
-  });
-  const result = compressImage(pixels(values), 4, 4, {
-    blockSize: 4,
-    localColorCount: 4,
-    globalColorCount: 16,
-    paletteColorBits: 24,
-    paletteMode: "vector",
-    vectorColorSpace: "rgb",
-    vectorDeviation: 0.02,
-    colorSpace: "rgb",
-  });
-  const encoded = encodeBlockPaletteFile(result);
+  const image = createLegacyVectorImage("rgb");
+  const encoded = encodeBlockPaletteFile(image);
 
   encoded[4] = (encoded[4] & 0x0f) | 0x20;
 
@@ -166,7 +110,7 @@ test("continues to decode legacy RGB-vector BPAL v2 files", () => {
 
   assert.equal(decoded.version, 2);
   assert.equal(decoded.vectorColorSpace, "rgb");
-  assert.deepEqual(Array.from(decoded.pixels), Array.from(result.pixels));
+  assert.deepEqual(decoded.paletteVectors, image.paletteVectors);
 });
 
 test("continues to decode legacy BPAL v1 files", () => {
@@ -235,8 +179,24 @@ function pixels(values) {
   return new Uint8ClampedArray(values.flat());
 }
 
-function colorWithoutCodecFields(color) {
-  return { r: color.r, g: color.g, b: color.b, hex: color.hex };
+function createLegacyVectorImage(vectorColorSpace) {
+  return {
+    width: 2,
+    height: 2,
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 8,
+    paletteColorBits: 24,
+    paletteMode: "vector",
+    vectorColorSpace,
+    paletteVectorCount: 1,
+    paletteVectors: [{
+      start: { r: 0, g: 0, b: 0, hex: "#000000" },
+      end: { r: 255, g: 255, b: 255, hex: "#ffffff" },
+    }],
+    blockPaletteIndices: new Uint16Array([0, 7]),
+    pixelIndices: new Uint8Array([0, 1, 1, 0]),
+  };
 }
 
 function createVersion1Fixture() {

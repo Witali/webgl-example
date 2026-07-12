@@ -12,7 +12,7 @@
         <div class="title-block">
           <a class="back-link" href="./index.html">← На главную</a>
           <h1>Блочно-палитровое сжатие</h1>
-          <p>Общая палитра хранится явно или как набор RGB- либо OKLab-векторов, а каждый блок содержит маленькую таблицу ее индексов.</p>
+          <p>Одна общая RGB-палитра хранит цвета изображения, а каждый блок содержит маленькую таблицу ее индексов.</p>
         </div>
 
         <form id="controls">
@@ -66,25 +66,6 @@
             <select id="palette-color-bits" name="paletteColorBits">
               <option value="24" selected>24 бита · RGB888</option>
               <option value="16">16 бит · RGB565</option>
-            </select>
-          </label>
-
-          <label>
-            Хранение общей палитры
-            <select id="palette-mode" name="paletteMode">
-              <option value="explicit" selected>Все цвета явно</option>
-              <option value="vector-rgb">RGB-векторы</option>
-              <option value="vector-oklab">OKLab-векторы</option>
-            </select>
-          </label>
-
-          <label>
-            Девиация от оси
-            <select id="vector-deviation" name="vectorDeviation">
-              <option value="0.002">0,2% · предельная точность</option>
-              <option value="0.01">1% · максимум точности</option>
-              <option value="0.02">2% · точнее</option>
-              <option value="0.05" selected>5% · компактнее</option>
             </select>
           </label>
 
@@ -214,6 +195,6 @@
     </main>
 
     <script src="./src/palette/block-palette-format.js?v=block-palette-3"></script>
-    <script src="./src/pages/block-palette-page.js?v=block-palette-16"></script>
+    <script src="./src/pages/block-palette-page.js?v=block-palette-17"></script>
   </body>
 </html>

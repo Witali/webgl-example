@@ -6,8 +6,6 @@ const blockSizeSelect = document.getElementById("block-size");
 const localColorCountSelect = document.getElementById("local-color-count");
 const globalColorCountSelect = document.getElementById("global-color-count");
 const paletteColorBitsSelect = document.getElementById("palette-color-bits");
-const paletteModeSelect = document.getElementById("palette-mode");
-const vectorDeviationSelect = document.getElementById("vector-deviation");
 const colorSpaceSelect = document.getElementById("color-space");
 const algorithmSelect = document.getElementById("algorithm");
 const diversityInput = document.getElementById("diversity");
@@ -89,15 +87,12 @@ for (const select of [
   localColorCountSelect,
   globalColorCountSelect,
   paletteColorBitsSelect,
-  paletteModeSelect,
-  vectorDeviationSelect,
   colorSpaceSelect,
   algorithmSelect,
   ditheringSelect,
 ]) {
   select.addEventListener("change", () => {
     state.optimizationApplied = false;
-    updatePaletteModeControls();
     processImage();
   });
 }
@@ -143,7 +138,6 @@ window.addEventListener("beforeunload", () => {
 });
 
 updateDiversityLabel();
-updatePaletteModeControls();
 loadImage(imageSelect.value, optionLabel(imageSelect.selectedOptions[0])).catch(showError);
 
 async function loadImage(url, name) {
@@ -196,8 +190,8 @@ function processImage() {
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
   const workerUrl = settings.algorithm === "webgl"
-    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-9"
-    : "./src/palette/block-palette-worker.js?v=block-palette-15";
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-10"
+    : "./src/palette/block-palette-worker.js?v=block-palette-16";
   const worker = new Worker(workerUrl);
 
   state.worker = worker;
@@ -261,18 +255,14 @@ function renderResult(result) {
   storageHeader.textContent = formatBytes(fileLayout.headerBytes);
   storageHeaderFormula.textContent = `${window.BlockPaletteFormat.MAGIC} · v${window.BlockPaletteFormat.VERSION} · ${fileLayout.bitFieldHeaderBits} бит полей`;
   storageGlobal.textContent = formatBitSize(result.storage.globalPaletteBits);
-  storageGlobalFormula.textContent = result.paletteMode === "vector"
-    ? `${formatVectorCount(result.paletteVectorCount, result.vectorColorSpace)} × 2 конца × ${result.paletteColorBits / 8} байта · восстановлено ${result.globalColorCount} цветов`
-    : `${result.globalColorCount} × ${result.paletteColorBits / 8} байта · ${getPaletteFormatLabel(result.paletteColorBits)}`;
+  storageGlobalFormula.textContent = `${result.globalColorCount} × ${result.paletteColorBits / 8} байта · ${getPaletteFormatLabel(result.paletteColorBits)}`;
   storageBlocks.textContent = formatBitSize(result.storage.blockPaletteBits);
   storageBlocksFormula.textContent = `${formatInteger(result.blockCount)} × ${result.localColorCount} × ${result.globalIndexBits} бит`;
   storagePixels.textContent = formatBitSize(result.storage.pixelDataBits);
   storagePixelsFormula.textContent = `${formatInteger(result.width * result.height)} × ${result.localIndexBits} бит`;
   storageTotal.textContent = formatBytes(fileLayout.totalBytes);
   storageTotalFormula.textContent = `${formatBitSize(fileLayout.payloadBits)} данных · ${fileLayout.paddingBits === 0 ? "без padding" : `${fileLayout.paddingBits} бит padding`}`;
-  paletteSummary.textContent = result.paletteMode === "vector"
-    ? `${formatVectorCount(result.paletteVectorCount, result.vectorColorSpace)} · девиация до ${(result.vectorDeviationActual * 100).toFixed(1)}% · ${result.resultColorCount} использовано`
-    : `${result.activeGlobalColorCount} активных · ${result.resultColorCount} использовано · ${getPaletteFormatLabel(result.paletteColorBits)}`;
+  paletteSummary.textContent = `${result.activeGlobalColorCount} активных · ${result.resultColorCount} использовано · ${getPaletteFormatLabel(result.paletteColorBits)}`;
 
   globalPaletteElement.replaceChildren(...result.palette.map(createGlobalSwatch));
   renderSelectedBlock();
@@ -291,10 +281,6 @@ function renderResult(result) {
     globalColorCount: result.globalColorCount,
     paletteColorBits: result.paletteColorBits,
     paletteMode: result.paletteMode,
-    vectorColorSpace: result.vectorColorSpace,
-    vectorDeviation: result.vectorDeviation,
-    vectorDeviationActual: result.vectorDeviationActual,
-    paletteVectorCount: result.paletteVectorCount,
     algorithm: result.algorithm,
     acceleratedStages: result.acceleratedStages,
     fallbackReason: result.fallbackReason || null,
@@ -427,9 +413,7 @@ function getSettings() {
     localColorCount: Number(localColorCountSelect.value),
     globalColorCount: Number(globalColorCountSelect.value),
     paletteColorBits: Number(paletteColorBitsSelect.value),
-    paletteMode: getPaletteMode(),
-    vectorColorSpace: getVectorColorSpace(),
-    vectorDeviation: Number(vectorDeviationSelect.value),
+    paletteMode: "explicit",
     colorSpace: colorSpaceSelect.value,
     algorithm: algorithmSelect.value,
     dithering: ditheringSelect.value,
@@ -548,7 +532,7 @@ function downloadBlockPaletteFile() {
 
     downloadBlob(
       blob,
-      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit${settings.paletteMode === "vector" ? `-${settings.vectorColorSpace}-vectors-${formatDeviationPercent(settings.vectorDeviation).replace(".", "p")}pct` : ""}.bpal`
+      `${state.sourceName}-blocks-${settings.blockSize}-local-${settings.localColorCount}-global-${settings.globalColorCount}-${settings.paletteColorBits}bit.bpal`
     );
   } catch (error) {
     showError(error);
@@ -577,7 +561,7 @@ function optimizeSettings() {
   setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
 
   const preview = createOptimizationPreview();
-  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-8");
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-9");
 
   state.optimizerWorker = worker;
 
@@ -636,9 +620,7 @@ function optimizeSettings() {
       colorSpace: colorSpaceSelect.value,
       dithering: ditheringSelect.value,
       diversity: getDiversity(),
-      paletteMode: getPaletteMode(),
-      vectorColorSpace: getVectorColorSpace(),
-      vectorDeviation: Number(vectorDeviationSelect.value),
+      paletteMode: "explicit",
     },
   }, [preview.data.buffer]);
 }
@@ -738,8 +720,6 @@ function setBusy(busy) {
   localColorCountSelect.disabled = busy;
   globalColorCountSelect.disabled = busy;
   paletteColorBitsSelect.disabled = busy;
-  paletteModeSelect.disabled = busy;
-  vectorDeviationSelect.disabled = busy || getPaletteMode() !== "vector";
   colorSpaceSelect.disabled = busy;
   algorithmSelect.disabled = busy;
   diversityInput.disabled = busy;
@@ -766,10 +746,6 @@ function formatBytes(bytes) {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(2)} МиБ`;
-}
-
-function updatePaletteModeControls() {
-  vectorDeviationSelect.disabled = paletteModeSelect.disabled || getPaletteMode() !== "vector";
 }
 
 function formatBitSize(bits) {
@@ -806,47 +782,8 @@ function getPaletteFormatLabel(bits) {
   return Number(bits) === 16 ? "RGB565" : "RGB888";
 }
 
-function getPaletteStorageLabel(settings) {
-  if (settings.paletteMode !== "vector") {
-    return "явная палитра";
-  }
-
-  if (settings.paletteVectorCount) {
-    return formatVectorCount(settings.paletteVectorCount, settings.vectorColorSpace);
-  }
-
-  return `${getVectorColorSpaceLabel(settings.vectorColorSpace)}-векторы · девиация ${formatDeviationPercent(settings.vectorDeviation)}%`;
-}
-
-function formatDeviationPercent(value) {
-  const percent = Number(value) * 100;
-
-  return percent < 1 ? percent.toFixed(1) : percent.toFixed(0);
-}
-
-function getPaletteMode() {
-  return paletteModeSelect.value === "explicit" ? "explicit" : "vector";
-}
-
-function getVectorColorSpace() {
-  return paletteModeSelect.value === "vector-oklab" ? "oklab" : "rgb";
-}
-
-function getVectorColorSpaceLabel(value) {
-  return value === "oklab" ? "OKLab" : "RGB";
-}
-
-function formatVectorCount(count, vectorColorSpace) {
-  const absolute = Math.abs(Number(count));
-  const modulo100 = absolute % 100;
-  const modulo10 = absolute % 10;
-  let suffix = "ов";
-
-  if (modulo100 < 11 || modulo100 > 14) {
-    suffix = modulo10 === 1 ? "" : modulo10 >= 2 && modulo10 <= 4 ? "а" : "ов";
-  }
-
-  return `${formatInteger(count)} ${getVectorColorSpaceLabel(vectorColorSpace)}-вектор${suffix}`;
+function getPaletteStorageLabel() {
+  return "явная палитра";
 }
 
 function getDitheringLabel(mode) {

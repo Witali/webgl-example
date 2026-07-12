@@ -89,101 +89,6 @@ test("supports 1024-color and 4096-color common palettes", () => {
   assert.ok(Array.from(palette4096.blockPaletteIndices).every((index) => index < 4096));
 });
 
-test("builds an adaptive multi-vector palette from the requested deviation", () => {
-  const values = [];
-
-  for (let y = 0; y < 16; y += 1) {
-    for (let x = 0; x < 16; x += 1) {
-      values.push([x * 17, y * 17, x * y % 16 * 17, 255]);
-    }
-  }
-
-  const settings = {
-    blockSize: 8,
-    localColorCount: 4,
-    globalColorCount: 64,
-    paletteColorBits: 24,
-    paletteMode: "vector",
-    colorSpace: "rgb",
-  };
-  const precise = compressImage(pixels(values), 16, 16, {
-    ...settings,
-    vectorDeviation: 0.02,
-  });
-  const compact = compressImage(pixels(values), 16, 16, {
-    ...settings,
-    vectorDeviation: 0.10,
-  });
-
-  assert.equal(precise.paletteMode, "vector");
-  assert.equal(precise.palette.length, settings.globalColorCount);
-  assert.ok(precise.paletteVectorCount >= compact.paletteVectorCount);
-  assert.equal(precise.paletteVectors.length, precise.paletteVectorCount);
-  assert.equal(
-    precise.storage.globalPaletteBits,
-    precise.paletteVectorCount * 2 * settings.paletteColorBits
-  );
-  assert.ok(precise.paletteVectors.every((vector) => vector.start && vector.end));
-});
-
-test("represents colors on one RGB axis with one stored vector", () => {
-  const values = [];
-
-  for (let value = 0; value < 16; value += 1) {
-    const channel = value * 17;
-
-    values.push([channel, channel, channel, 255]);
-  }
-
-  const result = compressImage(pixels(values), 4, 4, {
-    blockSize: 4,
-    localColorCount: 4,
-    globalColorCount: 16,
-    paletteColorBits: 24,
-    paletteMode: "vector",
-    vectorDeviation: 0.02,
-    colorSpace: "rgb",
-  });
-
-  assert.equal(result.paletteVectorCount, 1);
-  assert.equal(result.storage.globalPaletteBits, 48);
-  assert.deepEqual(result.palette[0], {
-    r: 0, g: 0, b: 0, hex: "#000000", count: result.palette[0].count, active: true,
-  });
-  assert.equal(result.palette[15].hex, "#ffffff");
-});
-
-test("builds and interpolates adaptive vectors in OKLab", () => {
-  const values = [];
-
-  for (let y = 0; y < 8; y += 1) {
-    for (let x = 0; x < 8; x += 1) {
-      values.push([x * 36, y * 36, (7 - x) * 36, 255]);
-    }
-  }
-
-  const result = compressImage(pixels(values), 8, 8, {
-    blockSize: 4,
-    localColorCount: 4,
-    globalColorCount: 32,
-    paletteColorBits: 24,
-    paletteMode: "vector",
-    vectorColorSpace: "oklab",
-    vectorDeviation: 0.002,
-    colorSpace: "oklab",
-  });
-
-  assert.equal(result.vectorColorSpace, "oklab");
-  assert.equal(result.vectorDeviation, 0.002);
-  assert.ok(result.paletteVectorCount > 0);
-  assert.equal(result.palette.length, 32);
-  assert.ok(result.palette.every((color) => (
-    color.r >= 0 && color.r <= 255 &&
-    color.g >= 0 && color.g <= 255 &&
-    color.b >= 0 && color.b <= 255
-  )));
-});
-
 test("stores and reconstructs the common palette as RGB565 in 16-bit mode", () => {
   const source = pixels([
     [123, 201, 77, 255], [123, 201, 77, 255],
@@ -284,16 +189,10 @@ test("minimizes source-pixel error when selecting colors for a block", () => {
     blockSize: 8,
     localColorCount: 2,
     globalColorCount: 8,
-    paletteMode: "vector",
-    vectorDeviation: 0.01,
     colorSpace: "rgb",
   });
   const selected = Array.from(result.blockPaletteIndices.slice(0, 2));
   const selectionError = blockRgbError(values, selected, result.palette);
-  const individuallyNearest = new Set(values.map((value) => nearestRgbPaletteIndex(
-    value,
-    result.palette.slice(0, result.activeGlobalColorCount)
-  )));
   let optimumError = Infinity;
 
   for (let first = 0; first < result.activeGlobalColorCount; first += 1) {
@@ -306,7 +205,6 @@ test("minimizes source-pixel error when selecting colors for a block", () => {
   }
 
   assert.equal(selectionError, optimumError);
-  assert.ok(selected.some((paletteIndex) => !individuallyNearest.has(paletteIndex)));
 });
 
 test("supports Bayer and Floyd-Steinberg dithering inside block palettes", () => {
@@ -505,29 +403,9 @@ test("rejects non-power-of-two format settings", () => {
       blockSize: 2,
       localColorCount: 2,
       globalColorCount: 4,
-      paletteMode: "curves",
+      paletteMode: "vector",
     }),
     /Unsupported palette mode/
-  );
-  assert.throws(
-    () => compressImage(source, 2, 2, {
-      blockSize: 2,
-      localColorCount: 2,
-      globalColorCount: 4,
-      paletteMode: "vector",
-      vectorDeviation: 0.001,
-    }),
-    /vectorDeviation must be between 0.002 and 0.5/
-  );
-  assert.throws(
-    () => compressImage(source, 2, 2, {
-      blockSize: 2,
-      localColorCount: 2,
-      globalColorCount: 4,
-      paletteMode: "vector",
-      vectorColorSpace: "xyz",
-    }),
-    /Unsupported vector color space/
   );
 });
 
@@ -550,26 +428,6 @@ function blockRgbError(values, paletteIndices, palette) {
   }
 
   return error;
-}
-
-function nearestRgbPaletteIndex(value, palette) {
-  let bestIndex = 0;
-  let bestError = Infinity;
-
-  for (let index = 0; index < palette.length; index += 1) {
-    const color = palette[index];
-    const red = value[0] - color.r;
-    const green = value[1] - color.g;
-    const blue = value[2] - color.b;
-    const error = red * red + green * green + blue * blue;
-
-    if (error < bestError) {
-      bestIndex = index;
-      bestError = error;
-    }
-  }
-
-  return bestIndex;
 }
 
 function pixels(values) {
