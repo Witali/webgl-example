@@ -1,7 +1,7 @@
 "use strict";
 
-importScripts("./palette-quantizer.js?v=src-layout-3");
-importScripts("./block-palette-codec.js?v=block-palette-18");
+importScripts("./palette-quantizer.js?v=src-layout-4");
+importScripts("./block-palette-codec.js?v=block-palette-19");
 
 self.addEventListener("message", (event) => {
   const { pixels, width, height, settings } = event.data;

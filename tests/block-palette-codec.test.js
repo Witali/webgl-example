@@ -38,6 +38,25 @@ test("builds the common palette with K-medians when requested", () => {
   assert.equal(result.palette.length, 2);
 });
 
+test("builds the common palette with uniformly initialized K-means", () => {
+  const source = pixels([
+    [0, 0, 0, 255], [255, 0, 0, 255],
+    [0, 255, 0, 255], [0, 0, 255, 255],
+    [255, 255, 0, 255], [255, 0, 255, 255],
+    [0, 255, 255, 255], [255, 255, 255, 255],
+  ]);
+  const result = compressImage(source, 4, 2, {
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 4,
+    colorSpace: "rgb",
+    clusteringMethod: "k-means-uniform",
+  });
+
+  assert.equal(result.clusteringMethod, "k-means-uniform");
+  assert.equal(result.palette.length, 4);
+});
+
 test("keeps exact colors when every block can reference them", () => {
   const source = pixels([
     [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 255, 255],

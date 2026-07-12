@@ -192,8 +192,8 @@ function processImage() {
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
   const workerUrl = settings.algorithm === "webgl"
-    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-11"
-    : "./src/palette/block-palette-worker.js?v=block-palette-17";
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-12"
+    : "./src/palette/block-palette-worker.js?v=block-palette-18";
   const worker = new Worker(workerUrl);
 
   state.worker = worker;
@@ -565,7 +565,7 @@ function optimizeSettings() {
   setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
 
   const preview = createOptimizationPreview();
-  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-10");
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-11");
 
   state.optimizerWorker = worker;
 
@@ -793,7 +793,13 @@ function getPaletteStorageLabel() {
 }
 
 function getClusteringMethodLabel(value) {
-  return value === "k-medians" ? "K-medians · L1" : "K-means · L2";
+  if (value === "k-medians") {
+    return "K-medians · L1";
+  }
+
+  return value === "k-means-uniform"
+    ? "K-means · равномерный старт"
+    : "K-means · L2";
 }
 
 function getDitheringLabel(mode) {

@@ -131,6 +131,39 @@ test("supports K-medians with weighted medians and Manhattan distance", () => {
   assert.equal(medians.palette[0].hex, "#646464");
 });
 
+test("supports K-means with uniformly distributed initial centers", () => {
+  const values = [
+    [0, 0, 0, 255],
+    [255, 0, 0, 255],
+    [0, 255, 0, 255],
+    [0, 0, 255, 255],
+    [255, 255, 0, 255],
+    [255, 0, 255, 255],
+    [0, 255, 255, 255],
+    [255, 255, 255, 255],
+    ...Array(20).fill([120, 120, 120, 255]),
+    ...Array(15).fill([130, 130, 130, 255]),
+  ];
+  const source = pixels(values);
+  const regular = quantizeImage(source, values.length, 1, 4, {
+    colorSpace: "rgb",
+    clusteringMethod: "k-means",
+    maxIterations: 1,
+  });
+  const uniform = quantizeImage(source, values.length, 1, 4, {
+    colorSpace: "rgb",
+    clusteringMethod: "k-means-uniform",
+    maxIterations: 1,
+  });
+
+  assert.equal(uniform.clusteringMethod, "k-means-uniform");
+  assert.equal(uniform.palette.length, 4);
+  assert.notDeepEqual(
+    uniform.palette.map((color) => color.hex),
+    regular.palette.map((color) => color.hex)
+  );
+});
+
 test("diversity weighting gives rare hues more influence", () => {
   const values = [];
 

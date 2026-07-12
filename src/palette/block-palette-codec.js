@@ -1321,7 +1321,11 @@
       throw new RangeError(`Unsupported color space: ${colorSpace}`);
     }
 
-    if (clusteringMethod !== "k-means" && clusteringMethod !== "k-medians") {
+    if (
+      clusteringMethod !== "k-means" &&
+      clusteringMethod !== "k-means-uniform" &&
+      clusteringMethod !== "k-medians"
+    ) {
       throw new RangeError(`Unsupported clustering method: ${clusteringMethod}`);
     }
   }

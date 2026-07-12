@@ -14,7 +14,7 @@
   const DEFAULT_MAX_ITERATIONS = 24;
   const DITHERING_MODES = new Set(["none", "pattern-2x2", "pattern", "floyd-steinberg"]);
   const COLOR_SPACES = new Set(["oklab", "rgb"]);
-  const CLUSTERING_METHODS = new Set(["k-means", "k-medians"]);
+  const CLUSTERING_METHODS = new Set(["k-means", "k-means-uniform", "k-medians"]);
   const BAYER_2X2 = [
     0, 2,
     3, 1,
@@ -199,6 +199,10 @@
   }
 
   function initializeCentroids(colors, weights, colorCount, clusteringMethod) {
+    if (clusteringMethod === "k-means-uniform") {
+      return initializeUniformCentroids(colors, colorCount);
+    }
+
     const centroids = [];
     const selected = new Set();
     let firstIndex = 0;
@@ -239,6 +243,100 @@
     }
 
     return centroids;
+  }
+
+  function initializeUniformCentroids(colors, colorCount) {
+    const minimum = colors[0].slice();
+    const maximum = colors[0].slice();
+
+    for (let colorIndex = 1; colorIndex < colors.length; colorIndex += 1) {
+      for (let channel = 0; channel < 3; channel += 1) {
+        minimum[channel] = Math.min(minimum[channel], colors[colorIndex][channel]);
+        maximum[channel] = Math.max(maximum[channel], colors[colorIndex][channel]);
+      }
+    }
+
+    const gridSize = Math.ceil(Math.cbrt(colorCount));
+    const gridTargets = [];
+
+    for (let first = 0; first < gridSize; first += 1) {
+      for (let second = 0; second < gridSize; second += 1) {
+        for (let third = 0; third < gridSize; third += 1) {
+          const coordinates = [first, second, third];
+
+          gridTargets.push(coordinates.map((coordinate, channel) => (
+            minimum[channel] +
+            (maximum[channel] - minimum[channel]) * (coordinate + 0.5) / gridSize
+          )));
+        }
+      }
+    }
+
+    const targets = selectSpreadTargets(gridTargets, colorCount);
+    const selectedColors = new Set();
+    const centroids = [];
+
+    for (const target of targets) {
+      let bestColorIndex = -1;
+      let bestDistance = Infinity;
+
+      for (let colorIndex = 0; colorIndex < colors.length; colorIndex += 1) {
+        if (selectedColors.has(colorIndex)) {
+          continue;
+        }
+
+        const distance = squaredDistance(colors[colorIndex], target);
+
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestColorIndex = colorIndex;
+        }
+      }
+
+      selectedColors.add(bestColorIndex);
+      centroids.push(colors[bestColorIndex].slice());
+    }
+
+    return centroids;
+  }
+
+  function selectSpreadTargets(candidates, requestedCount) {
+    if (requestedCount >= candidates.length) {
+      return candidates;
+    }
+
+    const selected = [candidates[0]];
+    const selectedIndices = new Set([0]);
+    const nearestDistances = new Float64Array(candidates.length);
+
+    nearestDistances.fill(Infinity);
+
+    while (selected.length < requestedCount) {
+      const latest = selected[selected.length - 1];
+      let bestIndex = -1;
+      let bestDistance = -1;
+
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (selectedIndices.has(index)) {
+          continue;
+        }
+
+        nearestDistances[index] = Math.min(
+          nearestDistances[index],
+          squaredDistance(candidates[index], latest)
+        );
+
+        if (nearestDistances[index] > bestDistance) {
+          bestDistance = nearestDistances[index];
+          bestIndex = index;
+        }
+      }
+
+      selectedIndices.add(bestIndex);
+      selected.push(candidates[bestIndex]);
+    }
+
+    return selected;
   }
 
   function assignColors(colors, centroids, assignments, clusteringMethod) {
