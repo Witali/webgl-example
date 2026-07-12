@@ -34,6 +34,12 @@ const state = {
   dragY: 0,
   dragScrollLeft: 0,
   dragScrollTop: 0,
+  touches: new Map(),
+  pinching: false,
+  pinchStartDistance: 0,
+  pinchStartZoom: 1,
+  pinchImageX: 0,
+  pinchImageY: 0,
 };
 
 uploadButton.addEventListener("click", () => fileInput.click());
@@ -67,22 +73,28 @@ viewport.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 viewport.addEventListener("pointerdown", (event) => {
-  if (!state.loaded || event.button !== 0) {
+  if (!state.loaded) {
     return;
   }
 
-  state.dragging = true;
-  state.dragPointerId = event.pointerId;
-  state.dragX = event.clientX;
-  state.dragY = event.clientY;
-  state.dragScrollLeft = viewport.scrollLeft;
-  state.dragScrollTop = viewport.scrollTop;
-  viewport.classList.add("is-dragging");
-  viewport.setPointerCapture(event.pointerId);
-  event.preventDefault();
+  if (event.pointerType === "touch") {
+    startTouch(event);
+    return;
+  }
+
+  if (event.button === 0) {
+    startDrag(event.pointerId, event.clientX, event.clientY);
+    viewport.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
 });
 
 viewport.addEventListener("pointermove", (event) => {
+  if (state.touches.has(event.pointerId)) {
+    moveTouch(event);
+    return;
+  }
+
   if (!state.dragging || event.pointerId !== state.dragPointerId) {
     return;
   }
@@ -91,8 +103,8 @@ viewport.addEventListener("pointermove", (event) => {
   viewport.scrollTop = state.dragScrollTop - (event.clientY - state.dragY);
 });
 
-viewport.addEventListener("pointerup", finishDrag);
-viewport.addEventListener("pointercancel", finishDrag);
+viewport.addEventListener("pointerup", finishPointer);
+viewport.addEventListener("pointercancel", finishPointer);
 
 viewport.addEventListener("keydown", (event) => {
   if (!state.loaded) {
@@ -238,7 +250,7 @@ function fitImage() {
   stage.dataset.fitted = "true";
 }
 
-function setZoom(value, clientX, clientY, forceCenter) {
+function setZoom(value, clientX, clientY, forceCenter, fixedImagePoint) {
   if (!state.loaded) {
     return;
   }
@@ -247,8 +259,12 @@ function setZoom(value, clientX, clientY, forceCenter) {
   const viewportRect = viewport.getBoundingClientRect();
   const anchorOffsetX = clientX === undefined ? viewport.clientWidth / 2 : clientX - viewportRect.left;
   const anchorOffsetY = clientY === undefined ? viewport.clientHeight / 2 : clientY - viewportRect.top;
-  const imageX = (viewport.scrollLeft + anchorOffsetX - STAGE_MARGIN) / state.zoom;
-  const imageY = (viewport.scrollTop + anchorOffsetY - STAGE_MARGIN) / state.zoom;
+  const imageX = fixedImagePoint
+    ? fixedImagePoint.x
+    : (viewport.scrollLeft + anchorOffsetX - STAGE_MARGIN) / state.zoom;
+  const imageY = fixedImagePoint
+    ? fixedImagePoint.y
+    : (viewport.scrollTop + anchorOffsetY - STAGE_MARGIN) / state.zoom;
 
   state.zoom = nextZoom;
   stage.style.width = `${state.width * nextZoom}px`;
@@ -262,7 +278,7 @@ function setZoom(value, clientX, clientY, forceCenter) {
     stage.dataset.fitted = "false";
   }
 
-  requestAnimationFrame(() => {
+  const updateScrollPosition = () => {
     if (forceCenter) {
       viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2);
       viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2);
@@ -271,7 +287,13 @@ function setZoom(value, clientX, clientY, forceCenter) {
 
     viewport.scrollLeft = imageX * nextZoom + STAGE_MARGIN - anchorOffsetX;
     viewport.scrollTop = imageY * nextZoom + STAGE_MARGIN - anchorOffsetY;
-  });
+  };
+
+  if (fixedImagePoint) {
+    updateScrollPosition();
+  } else {
+    requestAnimationFrame(updateScrollPosition);
+  }
 }
 
 function panBy(left, top) {
@@ -282,18 +304,120 @@ function getPanStep(axis) {
   return (axis === "x" ? viewport.clientWidth : viewport.clientHeight) * 0.35;
 }
 
-function finishDrag(event) {
-  if (!state.dragging || event.pointerId !== state.dragPointerId) {
+function startTouch(event) {
+  if (state.touches.size >= 2) {
+    event.preventDefault();
     return;
   }
 
+  state.touches.set(event.pointerId, {
+    id: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+  });
+  viewport.setPointerCapture(event.pointerId);
+
+  if (state.touches.size === 1) {
+    startDrag(event.pointerId, event.clientX, event.clientY);
+  } else {
+    startPinch();
+  }
+
+  event.preventDefault();
+}
+
+function moveTouch(event) {
+  const touch = state.touches.get(event.pointerId);
+
+  touch.x = event.clientX;
+  touch.y = event.clientY;
+
+  if (state.pinching && state.touches.size === 2) {
+    const [first, second] = state.touches.values();
+    const distance = Math.max(1, getDistance(first, second));
+    const center = getCenter(first, second);
+    const nextZoom = state.pinchStartZoom * distance / state.pinchStartDistance;
+
+    setZoom(nextZoom, center.x, center.y, false, {
+      x: state.pinchImageX,
+      y: state.pinchImageY,
+    });
+  } else if (state.dragging && event.pointerId === state.dragPointerId) {
+    viewport.scrollLeft = state.dragScrollLeft - (event.clientX - state.dragX);
+    viewport.scrollTop = state.dragScrollTop - (event.clientY - state.dragY);
+  }
+
+  event.preventDefault();
+}
+
+function startPinch() {
+  const [first, second] = state.touches.values();
+  const center = getCenter(first, second);
+  const viewportRect = viewport.getBoundingClientRect();
+  const anchorOffsetX = center.x - viewportRect.left;
+  const anchorOffsetY = center.y - viewportRect.top;
+
   state.dragging = false;
   state.dragPointerId = null;
-  viewport.classList.remove("is-dragging");
+  state.pinching = true;
+  state.pinchStartDistance = Math.max(1, getDistance(first, second));
+  state.pinchStartZoom = state.zoom;
+  state.pinchImageX = (viewport.scrollLeft + anchorOffsetX - STAGE_MARGIN) / state.zoom;
+  state.pinchImageY = (viewport.scrollTop + anchorOffsetY - STAGE_MARGIN) / state.zoom;
+  viewport.classList.add("is-dragging");
+}
+
+function startDrag(pointerId, clientX, clientY) {
+  state.dragging = true;
+  state.dragPointerId = pointerId;
+  state.dragX = clientX;
+  state.dragY = clientY;
+  state.dragScrollLeft = viewport.scrollLeft;
+  state.dragScrollTop = viewport.scrollTop;
+  viewport.classList.add("is-dragging");
+}
+
+function finishPointer(event) {
+  if (state.touches.has(event.pointerId)) {
+    state.touches.delete(event.pointerId);
+
+    if (state.pinching) {
+      state.pinching = false;
+
+      if (state.touches.size === 1) {
+        const [remainingTouch] = state.touches.values();
+
+        startDrag(remainingTouch.id, remainingTouch.x, remainingTouch.y);
+      } else {
+        stopDrag();
+      }
+    } else if (state.dragPointerId === event.pointerId) {
+      stopDrag();
+    }
+  } else if (state.dragPointerId === event.pointerId) {
+    stopDrag();
+  }
 
   if (viewport.hasPointerCapture(event.pointerId)) {
     viewport.releasePointerCapture(event.pointerId);
   }
+}
+
+function stopDrag() {
+  state.dragging = false;
+  state.dragPointerId = null;
+  viewport.classList.remove("is-dragging");
+}
+
+function getDistance(first, second) {
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function getCenter(first, second) {
+  return {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  };
 }
 
 function setControlsEnabled(enabled) {
