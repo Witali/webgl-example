@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BPAL Viewer</title>
+    <link rel="stylesheet" href="./bpal-viewer.css">
+  </head>
+  <body>
+    <main class="viewer-shell">
+      <header class="page-header">
+        <div>
+          <a class="back-link" href="./index.html">← На главную</a>
+          <h1>BPAL Viewer</h1>
+          <p>Просмотр файлов BPAL и обычных изображений с масштабированием и свободным перемещением.</p>
+        </div>
+
+        <button id="upload-button" class="primary-button" type="button">Загрузить изображение</button>
+        <input id="file-input" type="file" accept=".bpal,image/*" hidden>
+      </header>
+
+      <section class="viewer-card" aria-labelledby="viewer-title">
+        <div class="viewer-toolbar">
+          <div class="file-info">
+            <h2 id="viewer-title">Изображение</h2>
+            <span id="status" role="status" aria-live="polite">Выберите файл BPAL или обычное изображение</span>
+          </div>
+
+          <div class="toolbar-controls" aria-label="Управление изображением">
+            <div class="zoom-controls" aria-label="Масштаб">
+              <button id="zoom-out" type="button" title="Уменьшить" disabled>−</button>
+              <output id="zoom-level" aria-label="Текущий масштаб">100%</output>
+              <button id="zoom-in" type="button" title="Увеличить" disabled>+</button>
+              <button id="actual-size" class="text-button" type="button" disabled>1:1</button>
+              <button id="fit-image" class="text-button" type="button" disabled>Вписать</button>
+            </div>
+
+            <div class="pan-controls" aria-label="Перемещение изображения">
+              <button id="pan-left" type="button" title="Прокрутить влево" disabled>←</button>
+              <button id="pan-up" type="button" title="Прокрутить вверх" disabled>↑</button>
+              <button id="pan-down" type="button" title="Прокрутить вниз" disabled>↓</button>
+              <button id="pan-right" type="button" title="Прокрутить вправо" disabled>→</button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          id="image-viewport"
+          class="image-viewport"
+          tabindex="0"
+          aria-label="Область просмотра изображения. Используйте перетаскивание или клавиши со стрелками для перемещения."
+        >
+          <div id="empty-state" class="empty-state">
+            <strong>Перетащите сюда файл</strong>
+            <span>Поддерживаются BPAL и форматы изображений, доступные браузеру</span>
+          </div>
+          <div id="image-stage" class="image-stage" hidden>
+            <canvas id="image-canvas"></canvas>
+          </div>
+        </div>
+
+        <p class="viewer-hint">Два пальца или Ctrl + колесо — масштаб · перетаскивание — перемещение · стрелки — прокрутка</p>
+      </section>
+    </main>
+
+    <script src="./src/palette/block-palette-format.js?v=bpal-viewer-1"></script>
+    <script src="./src/pages/bpal-viewer-page.js?v=bpal-viewer-1"></script>
+  </body>
+</html>
