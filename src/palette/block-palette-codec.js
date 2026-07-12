@@ -36,6 +36,7 @@
     const paletteColorBits = Number(options.paletteColorBits || 24);
     const paletteMode = options.paletteMode || "explicit";
     const colorSpace = options.colorSpace || "oklab";
+    const clusteringMethod = options.clusteringMethod || "k-means";
     const dithering = options.dithering || "none";
     const diversity = options.diversity === undefined ? 0 : Number(options.diversity);
     const accelerator = options.accelerator || null;
@@ -50,6 +51,7 @@
       paletteColorBits,
       paletteMode,
       colorSpace,
+      clusteringMethod,
       dithering,
       diversity
     );
@@ -65,6 +67,7 @@
       globalColorCount,
       {
         colorSpace,
+        clusteringMethod,
         dithering: "none",
         diversity,
         maxIterations: globalColorCount >= 4096 ? 6 : 16,
@@ -316,6 +319,7 @@
       resultColorCount: countNonZero(resultUsage),
       meanSquaredError: meanSquaredError(sourcePixels, outputPixels),
       colorSpace,
+      clusteringMethod,
       dithering,
       diversity,
       iterations,
@@ -1265,6 +1269,7 @@
     paletteColorBits,
     paletteMode,
     colorSpace,
+    clusteringMethod,
     dithering,
     diversity
   ) {
@@ -1314,6 +1319,10 @@
 
     if (colorSpace !== "oklab" && colorSpace !== "rgb") {
       throw new RangeError(`Unsupported color space: ${colorSpace}`);
+    }
+
+    if (clusteringMethod !== "k-means" && clusteringMethod !== "k-medians") {
+      throw new RangeError(`Unsupported clustering method: ${clusteringMethod}`);
     }
   }
 

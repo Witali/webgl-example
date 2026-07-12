@@ -16,6 +16,26 @@ test("uses quality-oriented explicit-palette defaults", () => {
   assert.equal(result.localColorCount, 8);
   assert.equal(result.paletteMode, "explicit");
   assert.equal(result.globalColorCount, 256);
+  assert.equal(result.clusteringMethod, "k-means");
+});
+
+test("builds the common palette with K-medians when requested", () => {
+  const source = pixels([
+    [0, 0, 0, 255], [0, 0, 0, 255],
+    [80, 80, 80, 255], [100, 100, 100, 255],
+    [120, 120, 120, 255], [255, 255, 255, 255],
+    [255, 255, 255, 255], [255, 255, 255, 255],
+  ]);
+  const result = compressImage(source, 4, 2, {
+    blockSize: 2,
+    localColorCount: 2,
+    globalColorCount: 2,
+    colorSpace: "rgb",
+    clusteringMethod: "k-medians",
+  });
+
+  assert.equal(result.clusteringMethod, "k-medians");
+  assert.equal(result.palette.length, 2);
 });
 
 test("keeps exact colors when every block can reference them", () => {
@@ -406,6 +426,15 @@ test("rejects non-power-of-two format settings", () => {
       paletteMode: "vector",
     }),
     /Unsupported palette mode/
+  );
+  assert.throws(
+    () => compressImage(source, 2, 2, {
+      blockSize: 2,
+      localColorCount: 2,
+      globalColorCount: 4,
+      clusteringMethod: "k-medoids",
+    }),
+    /Unsupported clustering method/
   );
 });
 

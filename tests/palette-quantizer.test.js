@@ -110,6 +110,27 @@ test("uses OKLab by default and supports explicit RGB clustering", () => {
   assertUsesOnlyPaletteColors(rgb);
 });
 
+test("supports K-medians with weighted medians and Manhattan distance", () => {
+  const source = pixels([
+    [0, 0, 0, 255],
+    [100, 100, 100, 255],
+    [255, 255, 255, 255],
+  ]);
+  const means = quantizeImage(source, 3, 1, 1, {
+    colorSpace: "rgb",
+    clusteringMethod: "k-means",
+  });
+  const medians = quantizeImage(source, 3, 1, 1, {
+    colorSpace: "rgb",
+    clusteringMethod: "k-medians",
+  });
+
+  assert.equal(means.clusteringMethod, "k-means");
+  assert.equal(medians.clusteringMethod, "k-medians");
+  assert.equal(means.palette[0].hex, "#767676");
+  assert.equal(medians.palette[0].hex, "#646464");
+});
+
 test("diversity weighting gives rare hues more influence", () => {
   const values = [];
 
@@ -150,6 +171,19 @@ test("rejects unknown color spaces", () => {
   assert.throws(
     () => quantizeImage(pixels([[0, 0, 0, 255]]), 1, 1, 1, { colorSpace: "xyz" }),
     /Unsupported color space/
+  );
+});
+
+test("rejects unknown clustering methods", () => {
+  assert.throws(
+    () => quantizeImage(
+      pixels([[0, 0, 0, 255]]),
+      1,
+      1,
+      1,
+      { clusteringMethod: "k-medoids" }
+    ),
+    /Unsupported clustering method/
   );
 });
 

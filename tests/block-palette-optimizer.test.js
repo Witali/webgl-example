@@ -73,11 +73,13 @@ test("optimizes using explicit-palette storage and the BPAL v3 header", () => {
   const options = {
     profiles: [profile],
     colorSpace: "rgb",
+    clusteringMethod: "k-medians",
   };
   const optimized = findBalancedBlockPaletteSettings(source, 2, 2, options);
   const compressed = compressImage(source, 2, 2, { ...profile, ...options });
 
   assert.equal(compressed.paletteMode, "explicit");
+  assert.equal(compressed.clusteringMethod, "k-medians");
   assert.equal(compressed.storage.globalPaletteBits, 8 * 24);
   assert.equal(optimized.selected.fileBytes, compressed.storage.totalBytes + 14);
 });

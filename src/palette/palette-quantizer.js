@@ -14,6 +14,7 @@
   const DEFAULT_MAX_ITERATIONS = 24;
   const DITHERING_MODES = new Set(["none", "pattern-2x2", "pattern", "floyd-steinberg"]);
   const COLOR_SPACES = new Set(["oklab", "rgb"]);
+  const CLUSTERING_METHODS = new Set(["k-means", "k-medians"]);
   const BAYER_2X2 = [
     0, 2,
     3, 1,
@@ -35,6 +36,7 @@
       : DEFAULT_MAX_ITERATIONS;
     const dithering = settings.dithering || "none";
     const colorSpace = settings.colorSpace || "oklab";
+    const clusteringMethod = settings.clusteringMethod || "k-means";
     const diversity = settings.diversity === undefined ? 0 : Number(settings.diversity);
 
     if (!DITHERING_MODES.has(dithering)) {
@@ -43,6 +45,10 @@
 
     if (!COLOR_SPACES.has(colorSpace)) {
       throw new RangeError(`Unsupported color space: ${colorSpace}`);
+    }
+
+    if (!CLUSTERING_METHODS.has(clusteringMethod)) {
+      throw new RangeError(`Unsupported clustering method: ${clusteringMethod}`);
     }
 
     if (!Number.isFinite(diversity) || diversity < 0 || diversity > 1) {
@@ -62,6 +68,7 @@
         meanSquaredError: 0,
         dithering,
         colorSpace,
+        clusteringMethod,
         diversity,
       };
     }
@@ -74,7 +81,12 @@
       ? histogram.colors.map((color) => srgbToOklab(color[0], color[1], color[2]))
       : histogram.colors;
     const clusteringWeights = createClusteringWeights(histogram.weights, diversity);
-    const centroids = initializeCentroids(clusteringColors, clusteringWeights, colorCount);
+    const centroids = initializeCentroids(
+      clusteringColors,
+      clusteringWeights,
+      colorCount,
+      clusteringMethod
+    );
     const assignments = new Int16Array(histogram.colors.length);
 
     assignments.fill(-1);
@@ -82,12 +94,18 @@
     let iterations = 0;
 
     for (; iterations < maxIterations; iterations += 1) {
-      const changed = assignColors(clusteringColors, centroids, assignments);
+      const changed = assignColors(
+        clusteringColors,
+        centroids,
+        assignments,
+        clusteringMethod
+      );
       const moved = updateCentroids(
         clusteringColors,
         clusteringWeights,
         assignments,
-        centroids
+        centroids,
+        clusteringMethod
       );
 
       const movementThreshold = colorSpace === "oklab" ? 1e-8 : 0.01;
@@ -100,7 +118,7 @@
 
     // Reassign once after the last centroid update so palette membership and
     // output pixels always refer to the final centers.
-    assignColors(clusteringColors, centroids, assignments);
+    assignColors(clusteringColors, centroids, assignments, clusteringMethod);
 
     const paletteData = createPalette(
       histogram.colors,
@@ -118,7 +136,8 @@
       width,
       height,
       dithering,
-      colorSpace
+      colorSpace,
+      clusteringMethod
     );
 
     return {
@@ -131,6 +150,7 @@
       meanSquaredError: calculatePixelMeanSquaredError(sourcePixels, outputPixels),
       dithering,
       colorSpace,
+      clusteringMethod,
       diversity,
     };
   }
@@ -178,7 +198,7 @@
     return { colors, weights, indexByColor };
   }
 
-  function initializeCentroids(colors, weights, colorCount) {
+  function initializeCentroids(colors, weights, colorCount, clusteringMethod) {
     const centroids = [];
     const selected = new Set();
     let firstIndex = 0;
@@ -201,7 +221,11 @@
           continue;
         }
 
-        const nearestDistance = nearestCentroidDistance(colors[index], centroids);
+        const nearestDistance = nearestCentroidDistance(
+          colors[index],
+          centroids,
+          clusteringMethod
+        );
         const score = nearestDistance * weights[index];
 
         if (score > bestScore) {
@@ -217,16 +241,16 @@
     return centroids;
   }
 
-  function assignColors(colors, centroids, assignments) {
+  function assignColors(colors, centroids, assignments, clusteringMethod) {
     let changed = false;
 
     for (let colorIndex = 0; colorIndex < colors.length; colorIndex += 1) {
       const color = colors[colorIndex];
       let bestCluster = 0;
-      let bestDistance = squaredDistance(color, centroids[0]);
+      let bestDistance = clusteringDistance(color, centroids[0], clusteringMethod);
 
       for (let cluster = 1; cluster < centroids.length; cluster += 1) {
-        const distance = squaredDistance(color, centroids[cluster]);
+        const distance = clusteringDistance(color, centroids[cluster], clusteringMethod);
 
         if (distance < bestDistance) {
           bestDistance = distance;
@@ -243,7 +267,13 @@
     return changed;
   }
 
-  function updateCentroids(colors, weights, assignments, centroids) {
+  function updateCentroids(colors, weights, assignments, centroids, clusteringMethod) {
+    return clusteringMethod === "k-medians"
+      ? updateMedians(colors, weights, assignments, centroids)
+      : updateMeans(colors, weights, assignments, centroids);
+  }
+
+  function updateMeans(colors, weights, assignments, centroids) {
     const sums = Array.from({ length: centroids.length }, () => [0, 0, 0]);
     const clusterWeights = new Float64Array(centroids.length);
 
@@ -276,6 +306,57 @@
     }
 
     return totalMovement;
+  }
+
+  function updateMedians(colors, weights, assignments, centroids) {
+    const members = Array.from({ length: centroids.length }, () => []);
+
+    for (let colorIndex = 0; colorIndex < colors.length; colorIndex += 1) {
+      members[assignments[colorIndex]].push(colorIndex);
+    }
+
+    let totalMovement = 0;
+
+    for (let cluster = 0; cluster < centroids.length; cluster += 1) {
+      if (members[cluster].length === 0) {
+        continue;
+      }
+
+      const next = [
+        weightedMedian(colors, weights, members[cluster], 0),
+        weightedMedian(colors, weights, members[cluster], 1),
+        weightedMedian(colors, weights, members[cluster], 2),
+      ];
+
+      totalMovement += manhattanDistance(centroids[cluster], next);
+      centroids[cluster] = next;
+    }
+
+    return totalMovement;
+  }
+
+  function weightedMedian(colors, weights, members, channel) {
+    const sorted = members.slice().sort((left, right) => (
+      colors[left][channel] - colors[right][channel] || left - right
+    ));
+    let totalWeight = 0;
+
+    for (const colorIndex of sorted) {
+      totalWeight += weights[colorIndex];
+    }
+
+    const midpoint = totalWeight / 2;
+    let accumulated = 0;
+
+    for (const colorIndex of sorted) {
+      accumulated += weights[colorIndex];
+
+      if (accumulated >= midpoint) {
+        return colors[colorIndex][channel];
+      }
+    }
+
+    return colors[sorted[sorted.length - 1]][channel];
   }
 
   function createPalette(colors, weights, assignments, centroids, colorSpace) {
@@ -324,7 +405,8 @@
     width,
     height,
     dithering,
-    colorSpace
+    colorSpace,
+    clusteringMethod
   ) {
     if (dithering === "pattern-2x2" || dithering === "pattern") {
       const matrix = dithering === "pattern-2x2" ? BAYER_2X2 : BAYER_4X4;
@@ -337,12 +419,20 @@
         palette,
         colorSpace,
         matrix,
-        matrixSize
+        matrixSize,
+        clusteringMethod
       );
     }
 
     if (dithering === "floyd-steinberg") {
-      return applyFloydSteinbergDithering(sourcePixels, width, height, palette, colorSpace);
+      return applyFloydSteinbergDithering(
+        sourcePixels,
+        width,
+        height,
+        palette,
+        colorSpace,
+        clusteringMethod
+      );
     }
 
     const output = new Uint8ClampedArray(sourcePixels.length);
@@ -379,7 +469,8 @@
     palette,
     colorSpace,
     matrix,
-    matrixSize
+    matrixSize,
+    clusteringMethod
   ) {
     const output = new Uint8ClampedArray(sourcePixels.length);
     const palettePoints = createPalettePoints(palette, colorSpace);
@@ -403,7 +494,8 @@
           sourcePixels[index + 1] + threshold,
           sourcePixels[index + 2] + threshold,
           palettePoints,
-          colorSpace
+          colorSpace,
+          clusteringMethod
         );
 
         writePalettePixel(output, index, alpha, palette[paletteIndex]);
@@ -413,7 +505,14 @@
     return output;
   }
 
-  function applyFloydSteinbergDithering(sourcePixels, width, height, palette, colorSpace) {
+  function applyFloydSteinbergDithering(
+    sourcePixels,
+    width,
+    height,
+    palette,
+    colorSpace,
+    clusteringMethod
+  ) {
     const output = new Uint8ClampedArray(sourcePixels.length);
     const palettePoints = createPalettePoints(palette, colorSpace);
     const rowLength = (width + 2) * 3;
@@ -439,7 +538,8 @@
           correctedGreen,
           correctedBlue,
           palettePoints,
-          colorSpace
+          colorSpace,
+          clusteringMethod
         );
         const color = palette[paletteIndex];
 
@@ -472,13 +572,20 @@
     });
   }
 
-  function findNearestPaletteIndex(red, green, blue, palettePoints, colorSpace) {
+  function findNearestPaletteIndex(
+    red,
+    green,
+    blue,
+    palettePoints,
+    colorSpace,
+    clusteringMethod
+  ) {
     const color = toClusteringPoint(red, green, blue, colorSpace);
     let bestIndex = 0;
-    let bestDistance = squaredDistance(color, palettePoints[0]);
+    let bestDistance = clusteringDistance(color, palettePoints[0], clusteringMethod);
 
     for (let index = 1; index < palettePoints.length; index += 1) {
-      const distance = squaredDistance(color, palettePoints[index]);
+      const distance = clusteringDistance(color, palettePoints[index], clusteringMethod);
 
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -529,11 +636,14 @@
     return channelCount === 0 ? 0 : squaredError / channelCount;
   }
 
-  function nearestCentroidDistance(color, centroids) {
-    let distance = squaredDistance(color, centroids[0]);
+  function nearestCentroidDistance(color, centroids, clusteringMethod) {
+    let distance = clusteringDistance(color, centroids[0], clusteringMethod);
 
     for (let index = 1; index < centroids.length; index += 1) {
-      distance = Math.min(distance, squaredDistance(color, centroids[index]));
+      distance = Math.min(
+        distance,
+        clusteringDistance(color, centroids[index], clusteringMethod)
+      );
     }
 
     return distance;
@@ -545,6 +655,20 @@
     const third = left[2] - right[2];
 
     return first * first + second * second + third * third;
+  }
+
+  function manhattanDistance(left, right) {
+    return (
+      Math.abs(left[0] - right[0]) +
+      Math.abs(left[1] - right[1]) +
+      Math.abs(left[2] - right[2])
+    );
+  }
+
+  function clusteringDistance(left, right, clusteringMethod) {
+    return clusteringMethod === "k-medians"
+      ? manhattanDistance(left, right)
+      : squaredDistance(left, right);
   }
 
   function srgbToOklab(red, green, blue) {

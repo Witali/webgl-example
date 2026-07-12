@@ -49,6 +49,7 @@
     const profiles = normalizeProfiles(searchOptions.profiles || DEFAULT_PROFILES);
     const commonSettings = {
       colorSpace: searchOptions.colorSpace || "oklab",
+      clusteringMethod: searchOptions.clusteringMethod || "k-means",
       dithering: searchOptions.dithering || "none",
       diversity: searchOptions.diversity === undefined ? 0 : searchOptions.diversity,
       paletteMode: "explicit",

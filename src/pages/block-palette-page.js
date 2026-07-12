@@ -7,6 +7,7 @@ const localColorCountSelect = document.getElementById("local-color-count");
 const globalColorCountSelect = document.getElementById("global-color-count");
 const paletteColorBitsSelect = document.getElementById("palette-color-bits");
 const colorSpaceSelect = document.getElementById("color-space");
+const clusteringMethodSelect = document.getElementById("clustering-method");
 const algorithmSelect = document.getElementById("algorithm");
 const diversityInput = document.getElementById("diversity");
 const diversityValue = document.getElementById("diversity-value");
@@ -88,6 +89,7 @@ for (const select of [
   globalColorCountSelect,
   paletteColorBitsSelect,
   colorSpaceSelect,
+  clusteringMethodSelect,
   algorithmSelect,
   ditheringSelect,
 ]) {
@@ -190,13 +192,13 @@ function processImage() {
   const sourceCopy = new Uint8ClampedArray(state.sourceImageData.data);
   const processingId = ++state.processingId;
   const workerUrl = settings.algorithm === "webgl"
-    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-10"
-    : "./src/palette/block-palette-worker.js?v=block-palette-16";
+    ? "./src/palette/block-palette-webgl-worker.js?v=block-palette-11"
+    : "./src/palette/block-palette-worker.js?v=block-palette-17";
   const worker = new Worker(workerUrl);
 
   state.worker = worker;
   setStatus(
-    `${getAlgorithmLabel(settings.algorithm)} · общая палитра ${settings.globalColorCount} · ${getPaletteStorageLabel(settings)} · ${getPaletteFormatLabel(settings.paletteColorBits)} · ${getDiversityLabel()} · блок ${settings.blockSize}×${settings.blockSize} · ${settings.localColorCount} цвета на блок · ${getDitheringLabel(settings.dithering)}…`,
+    `${getAlgorithmLabel(settings.algorithm)} · общая палитра ${settings.globalColorCount} · ${getPaletteStorageLabel(settings)} · ${getPaletteFormatLabel(settings.paletteColorBits)} · ${getClusteringMethodLabel(settings.clusteringMethod)} · ${getDiversityLabel()} · блок ${settings.blockSize}×${settings.blockSize} · ${settings.localColorCount} цвета на блок · ${getDitheringLabel(settings.dithering)}…`,
     "busy"
   );
 
@@ -215,7 +217,7 @@ function processImage() {
     stopWorker();
     setBusy(false);
     setStatus(
-      `Готово: ${formatInteger(event.data.blockCount)} блоков, ${event.data.localIndexBits} бит/пиксель внутри блока, файл BPAL ${formatBytes(fileLayout.totalBytes)} · ${getPaletteStorageLabel(event.data)} · ${getAlgorithmLabel(event.data.algorithm)} · ${getDiversityLabel()} · ${getDitheringLabel(event.data.dithering)}${state.optimizationApplied ? " · подобрано автоматически" : ""}.`
+      `Готово: ${formatInteger(event.data.blockCount)} блоков, ${event.data.localIndexBits} бит/пиксель внутри блока, файл BPAL ${formatBytes(fileLayout.totalBytes)} · ${getPaletteStorageLabel(event.data)} · ${getClusteringMethodLabel(event.data.clusteringMethod)} · ${getAlgorithmLabel(event.data.algorithm)} · ${getDiversityLabel()} · ${getDitheringLabel(event.data.dithering)}${state.optimizationApplied ? " · подобрано автоматически" : ""}.`
     );
   });
 
@@ -250,7 +252,7 @@ function renderResult(result) {
   metricBpp.textContent = result.storage.bitsPerPixel.toFixed(2);
   metricRatio.textContent = `${result.storage.compressionRatio.toFixed(2)}×`;
   metricError.textContent = Math.sqrt(result.meanSquaredError).toFixed(2);
-  processingTime.textContent = `${result.durationMs.toFixed(1)} мс · ${getColorSpaceLabel(result.colorSpace)} · ${getAlgorithmLabel(result.algorithm)}`;
+  processingTime.textContent = `${result.durationMs.toFixed(1)} мс · ${getColorSpaceLabel(result.colorSpace)} · ${getClusteringMethodLabel(result.clusteringMethod)} · ${getAlgorithmLabel(result.algorithm)}`;
 
   storageHeader.textContent = formatBytes(fileLayout.headerBytes);
   storageHeaderFormula.textContent = `${window.BlockPaletteFormat.MAGIC} · v${window.BlockPaletteFormat.VERSION} · ${fileLayout.bitFieldHeaderBits} бит полей`;
@@ -284,6 +286,7 @@ function renderResult(result) {
     algorithm: result.algorithm,
     acceleratedStages: result.acceleratedStages,
     fallbackReason: result.fallbackReason || null,
+    clusteringMethod: result.clusteringMethod,
     dithering: result.dithering,
     diversity: result.diversity,
     storage: result.storage,
@@ -415,6 +418,7 @@ function getSettings() {
     paletteColorBits: Number(paletteColorBitsSelect.value),
     paletteMode: "explicit",
     colorSpace: colorSpaceSelect.value,
+    clusteringMethod: clusteringMethodSelect.value,
     algorithm: algorithmSelect.value,
     dithering: ditheringSelect.value,
     diversity: getDiversity(),
@@ -561,7 +565,7 @@ function optimizeSettings() {
   setStatus("Подготавливаю уменьшенную копию для поиска настроек…", "busy");
 
   const preview = createOptimizationPreview();
-  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-9");
+  const worker = new Worker("./src/palette/block-palette-optimizer-worker.js?v=block-palette-10");
 
   state.optimizerWorker = worker;
 
@@ -618,6 +622,7 @@ function optimizeSettings() {
     height: preview.height,
     options: {
       colorSpace: colorSpaceSelect.value,
+      clusteringMethod: clusteringMethodSelect.value,
       dithering: ditheringSelect.value,
       diversity: getDiversity(),
       paletteMode: "explicit",
@@ -721,6 +726,7 @@ function setBusy(busy) {
   globalColorCountSelect.disabled = busy;
   paletteColorBitsSelect.disabled = busy;
   colorSpaceSelect.disabled = busy;
+  clusteringMethodSelect.disabled = busy;
   algorithmSelect.disabled = busy;
   diversityInput.disabled = busy;
   ditheringSelect.disabled = busy;
@@ -784,6 +790,10 @@ function getPaletteFormatLabel(bits) {
 
 function getPaletteStorageLabel() {
   return "явная палитра";
+}
+
+function getClusteringMethodLabel(value) {
+  return value === "k-medians" ? "K-medians · L1" : "K-means · L2";
 }
 
 function getDitheringLabel(mode) {
